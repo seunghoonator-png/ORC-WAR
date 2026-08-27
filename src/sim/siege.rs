@@ -184,6 +184,7 @@ fn batter_structures(w: &mut World) {
         let castle = w.castle.as_ref().unwrap();
         let mut terrain = std::mem::replace(&mut w.terrain, crate::map::TerrainMap::flat(1.0));
         castle.restamp_segment(&mut terrain, *k);
+        terrain.bake_gradients();
         w.terrain = terrain;
     }
     // 비용과 경로는 곧바로가 아니라 묶어서 다시 굽는다(World::step 참고)
@@ -329,26 +330,25 @@ fn pour_from_walls(w: &mut World) {
             continue;
         }
         let mut struck = 0u32;
-        grid.for_each_near(pos[i], DROP_RANGE, |j| {
+        grid.for_each_near(pos[i], DROP_RANGE, |it| {
             if struck >= DROP_TARGETS {
                 return;
             }
-            let ju = j as usize;
-            if team[ju] == 1 {
+            if it.team == 1 {
                 return;
             }
-            let d = [pos[ju][0] - pos[i][0], pos[ju][1] - pos[i][1]];
+            let d = [it.pos[0] - pos[i][0], it.pos[1] - pos[i][1]];
             if d[0] * d[0] + d[1] * d[1] > DROP_RANGE * DROP_RANGE {
                 return;
             }
             struck += 1;
             // 기어오르는 중이면 몸을 가릴 수 없다
-            let mult = if charge_t[ju] > 0 {
+            let mult = if charge_t[it.idx as usize] > 0 {
                 CLIMBING_DROP_MULT
             } else {
                 1.0
             };
-            hits.push((j, DROP_DAMAGE * mult));
+            hits.push((it.idx, DROP_DAMAGE * mult));
         });
     }
 

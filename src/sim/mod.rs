@@ -193,6 +193,7 @@ impl World {
     /// 성곽을 세우고 지형에 찍는다.
     pub fn place_castle(&mut self, castle: Castle) {
         castle.stamp(&mut self.terrain);
+        self.terrain.bake_gradients();
         self.castle = Some(castle);
         self.rebuild_cost();
     }
@@ -235,7 +236,12 @@ impl World {
         self.vel_next.resize(n, [0.0, 0.0]);
         self.facing_next.resize(n, 0.0);
         self.refresh_alive();
-        self.grid.rebuild(&self.pool.pos, &self.alive);
+        self.grid.rebuild(
+            &self.pool.pos,
+            &self.alive,
+            &self.pool.team,
+            &self.pool.type_id,
+        );
         self.recount();
         self.start_strength = self.stats.alive;
         // 첫 틱부터 유닛이 갈 곳을 알도록 모든 장을 미리 굽는다
@@ -275,7 +281,12 @@ impl World {
 
         // 3. 그리드 재구축 (이동 후 최신 위치 기준)
         self.refresh_alive();
-        self.grid.rebuild(&self.pool.pos, &self.alive);
+        self.grid.rebuild(
+            &self.pool.pos,
+            &self.alive,
+            &self.pool.team,
+            &self.pool.type_id,
+        );
         let t3 = Instant::now();
 
         // 4. 돌격 충돌과 창벽

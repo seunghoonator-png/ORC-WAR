@@ -206,15 +206,15 @@ pub fn step(w: &mut World) {
                 let power = s.melee_dmg * (1.0 + momentum * IMPACT_SCALE * s.charge_power) * windup;
                 let my_team = team[i];
                 let mut trampled = 0u32;
-                grid.for_each_near(pos[i], IMPACT_RADIUS, |j| {
+                grid.for_each_near(pos[i], IMPACT_RADIUS, |it| {
                     if trampled >= MAX_TRAMPLED {
                         return;
                     }
-                    let ju = j as usize;
-                    if team[ju] == my_team || hp[ju] <= 0.0 {
+                    let ju = it.idx as usize;
+                    if it.team == my_team || hp[ju] <= 0.0 {
                         return;
                     }
-                    let dd = [pos[ju][0] - pos[i][0], pos[ju][1] - pos[i][1]];
+                    let dd = [it.pos[0] - pos[i][0], it.pos[1] - pos[i][1]];
                     if dd[0] * dd[0] + dd[1] * dd[1] > IMPACT_RADIUS * IMPACT_RADIUS {
                         return;
                     }
@@ -224,7 +224,7 @@ pub fn step(w: &mut World) {
                     }
                     trampled += 1;
                     out.push(Impact {
-                        target: j,
+                        target: it.idx,
                         attacker: i as u32,
                         dmg: power,
                         reflect: 0.0,

@@ -106,6 +106,12 @@ pub struct TerrainMap {
     pub kind: Vec<Terrain>,
     /// 해발 고도(m)
     pub height: Vec<f32>,
+    /// 칸마다의 기울기 (dh/dx, dh/dy).
+    ///
+    /// 유닛마다 고도를 보간해 경사를 구하면 배열을 여덟 번 뒤지게 된다.
+    /// 30만이 매 틱 그 짓을 하면 이동 단계가 통째로 무거워지므로, 지형이
+    /// 바뀔 때 한 번 구워 두고 조회 한 번으로 끝낸다.
+    pub grad: Vec<[f32; 2]>,
 }
 
 impl TerrainMap {
@@ -117,6 +123,23 @@ impl TerrainMap {
             cell: TERRAIN_CELL,
             kind: vec![Terrain::Plain; w * w],
             height: vec![0.0; w * w],
+            grad: vec![[0.0, 0.0]; w * w],
+        }
+    }
+
+    /// 고도에서 기울기 격자를 굽는다. 지형을 고친 뒤에는 반드시 호출해야 한다.
+    pub fn bake_gradients(&mut self) {
+        let inv = 1.0 / (2.0 * self.cell);
+        for cy in 0..self.h {
+            for cx in 0..self.w {
+                let xm = cx.saturating_sub(1);
+                let xp = (cx + 1).min(self.w - 1);
+                let ym = cy.saturating_sub(1);
+                let yp = (cy + 1).min(self.h - 1);
+                let gx = (self.height[cy * self.w + xp] - self.height[cy * self.w + xm]) * inv;
+                let gy = (self.height[yp * self.w + cx] - self.height[ym * self.w + cx]) * inv;
+                self.grad[cy * self.w + cx] = [gx, gy];
+            }
         }
     }
 
@@ -155,8 +178,14 @@ impl TerrainMap {
     /// 진행 방향으로의 경사 (양수면 오르막). 단위는 m/m.
     #[inline(always)]
     pub fn slope_along(&self, p: [f32; 2], dir: [f32; 2]) -> f32 {
-        const STEP: f32 = 6.0;
-        let ahead = [p[0] + dir[0] * STEP, p[1] + dir[1] * STEP];
-        (self.height_at(ahead) - self.height_at(p)) / STEP
+        let g = self.grad[self.idx(p)];
+        g[0] * dir[0] + g[1] * dir[1]
+    }
+
+    /// 지형 종류와 기울기를 한 번의 인덱스 계산으로 함께 얻는다.
+    #[inline(always)]
+    pub fn ground_at(&self, p: [f32; 2]) -> (Terrain, [f32; 2]) {
+        let i = self.idx(p);
+        (self.kind[i], self.grad[i])
     }
 }

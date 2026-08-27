@@ -9,6 +9,19 @@
 
 use rayon::prelude::*;
 
+/// 격자에 담기는 한 항목.
+///
+/// 인덱스만 담고 위치는 원본 배열에서 찾아 읽으면, 이웃을 훑을 때마다 무작위
+/// 접근이 일어나 캐시가 계속 어긋난다. 순회에 필요한 값을 셀 순서대로 함께
+/// 담아 두면 이웃 순회가 통째로 순차 접근이 된다.
+#[derive(Clone, Copy)]
+pub struct GridItem {
+    pub idx: u32,
+    pub pos: [f32; 2],
+    pub type_id: u8,
+    pub team: u8,
+}
+
 pub struct Grid {
     /// 현재 셀 크기(m). 유닛이 넓게 퍼지면 자동으로 커진다
     pub cell_size: f32,
@@ -18,8 +31,8 @@ pub struct Grid {
     pub h: usize,
     /// 셀별 items 시작 오프셋. len = w*h + 1
     pub cell_start: Vec<u32>,
-    /// 셀 순으로 정렬된 유닛 인덱스
-    pub items: Vec<u32>,
+    /// 셀 순으로 정렬된 항목
+    pub items: Vec<GridItem>,
     /// 재구축 중 쓰는 커서
     cursor: Vec<u32>,
     base_cell: f32,
@@ -55,7 +68,7 @@ impl Grid {
     }
 
     /// 살아있는 유닛만 담아 그리드를 다시 만든다.
-    pub fn rebuild(&mut self, pos: &[[f32; 2]], alive: &[bool]) {
+    pub fn rebuild(&mut self, pos: &[[f32; 2]], alive: &[bool], team: &[u8], type_id: &[u8]) {
         // --- 1. 경계 상자 (병렬 reduce, 순서와 무관하므로 결정론적) ---
         let bbox = pos
             .par_iter()
@@ -125,20 +138,33 @@ impl Grid {
         self.cursor.copy_from_slice(&self.cell_start[..ncells]);
 
         self.items.clear();
-        self.items.resize(live, 0);
+        self.items.resize(
+            live,
+            GridItem {
+                idx: 0,
+                pos: [0.0, 0.0],
+                type_id: 0,
+                team: 0,
+            },
+        );
         for (i, p) in pos.iter().enumerate() {
             if !alive[i] {
                 continue;
             }
             let c = self.cell_of(*p);
             let slot = self.cursor[c];
-            self.items[slot as usize] = i as u32;
+            self.items[slot as usize] = GridItem {
+                idx: i as u32,
+                pos: *p,
+                type_id: type_id[i],
+                team: team[i],
+            };
             self.cursor[c] = slot + 1;
         }
     }
 
     #[inline(always)]
-    pub fn cell_items(&self, cx: usize, cy: usize) -> &[u32] {
+    pub fn cell_items(&self, cx: usize, cy: usize) -> &[GridItem] {
         let c = cy * self.w + cx;
         let a = self.cell_start[c] as usize;
         let b = self.cell_start[c + 1] as usize;
@@ -160,9 +186,9 @@ impl Grid {
         )
     }
 
-    /// 주변 셀의 유닛을 순회한다.
+    /// 주변 셀의 항목을 순회한다.
     #[inline(always)]
-    pub fn for_each_near<F: FnMut(u32)>(&self, p: [f32; 2], r: f32, mut f: F) {
+    pub fn for_each_near<F: FnMut(&GridItem)>(&self, p: [f32; 2], r: f32, mut f: F) {
         if self.items.is_empty() {
             return;
         }
@@ -173,7 +199,7 @@ impl Grid {
                 let c = row + cx;
                 let a = self.cell_start[c] as usize;
                 let b = self.cell_start[c + 1] as usize;
-                for &it in &self.items[a..b] {
+                for it in &self.items[a..b] {
                     f(it);
                 }
             }

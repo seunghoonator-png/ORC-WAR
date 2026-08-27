@@ -41,6 +41,7 @@ struct Args {
     ticks: u64,
     seed: u64,
     bench: bool,
+    repeat: u32,
     flip: bool,
     quiet: bool,
 }
@@ -52,6 +53,7 @@ impl Default for Args {
             ticks: 1_200,
             seed: 1,
             bench: false,
+            repeat: 1,
             flip: false,
             quiet: false,
         }
@@ -78,6 +80,11 @@ fn parse_args() -> Args {
                 i += 1;
             }
             "--bench" => a.bench = true,
+            "--repeat" | "-r" => {
+                a.repeat = next(i).parse().unwrap_or(a.repeat).max(1);
+                a.bench = true;
+                i += 1;
+            }
             "--flip" => a.flip = true,
             "--quiet" | "-q" => a.quiet = true,
             "--headless" => {}
@@ -90,6 +97,7 @@ fn parse_args() -> Args {
                      --ticks, -t <N>   최대 틱 (기본 1200 = 60초)\n\
                      --seed,  -s <N>   난수 시드 (기본 1)\n\
                      --bench           페이즈별 성능 측정\n\
+                     --repeat, -r <N>  N회 반복 측정 (편차가 크면 다른 작업이 도는 중)\n\
                      --quiet, -q       진행 로그 생략"
                 );
                 std::process::exit(0);
@@ -99,6 +107,29 @@ fn parse_args() -> Args {
         i += 1;
     }
     a
+}
+
+/// 한 판을 끝까지 돌리고 틱당 평균 성능을 돌려준다.
+fn measure(sc: &Scenario, max_ticks: u64) -> (orc_war::sim::PhaseTimes, f64, u64) {
+    let mut w = sc.build();
+    let mut acc = orc_war::sim::PhaseTimes::default();
+    let mut worst = 0.0f64;
+    loop {
+        w.step();
+        let p = w.phase;
+        acc.flow += p.flow;
+        acc.movement += p.movement;
+        acc.grid += p.grid;
+        acc.combat += p.combat;
+        acc.shooting += p.shooting;
+        acc.siege += p.siege;
+        acc.morale += p.morale;
+        worst = worst.max(p.total());
+        if !matches!(w.outcome(max_ticks), Outcome::Ongoing) {
+            break;
+        }
+    }
+    (acc, worst, w.tick)
 }
 
 fn main() {
@@ -136,6 +167,8 @@ fn main() {
     let t0 = Instant::now();
     let mut acc = orc_war::sim::PhaseTimes::default();
     let mut worst = 0.0f64;
+    let mut worst_tick = 0u64;
+    let mut worst_phase = orc_war::sim::PhaseTimes::default();
 
     let outcome = loop {
         w.step();
@@ -146,7 +179,11 @@ fn main() {
         acc.combat += p.combat;
         acc.shooting += p.shooting;
         acc.morale += p.morale;
-        worst = worst.max(p.total());
+        if p.total() > worst {
+            worst = p.total();
+            worst_tick = w.tick;
+            worst_phase = p;
+        }
 
         if !args.quiet && w.tick.is_multiple_of(100) {
             println!(
@@ -199,6 +236,40 @@ fn main() {
         w.stats.fled[0], w.stats.fled[1]
     );
 
+    if args.bench && args.repeat > 1 {
+        // 한 번만 재면 다른 작업이 CPU 를 나눠 쓰고 있어도 알 수가 없다.
+        // 여러 번 재서 흔들림을 함께 보여 준다.
+        let mut totals = Vec::new();
+        for _ in 0..args.repeat {
+            let (acc, _, ticks) = measure(&sc, args.ticks);
+            totals.push(acc.total() / ticks as f64);
+        }
+        totals.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let lo = totals[0];
+        let hi = totals[totals.len() - 1];
+        let mid = totals[totals.len() / 2];
+        println!(
+            "\n=== 반복 측정 ({}회, {} 스레드) ===",
+            args.repeat, threads
+        );
+        for (k, t) in totals.iter().enumerate() {
+            println!("  {}회차  {:>7.2} ms/tick", k + 1, t);
+        }
+        println!("  중앙값  {mid:>7.2} ms/tick   최소 {lo:.2}  최대 {hi:.2}");
+        let spread = (hi - lo) / mid;
+        if spread > 0.10 {
+            println!(
+                "  ⚠ 회차별 편차가 {:.0}% 다. 측정이 흔들리고 있다.",
+                spread * 100.0
+            );
+        }
+        println!(
+            "  * 다른 작업(빌드·테스트 포함)이 함께 돌면 세 회차가 나란히 느려져\n  \
+             편차로는 드러나지 않는다. 반드시 놀고 있는 기계에서 잴 것."
+        );
+        return;
+    }
+
     if args.bench {
         println!("\n=== 성능 ({} 스레드, {} 유닛) ===", threads, w.pool.len());
         println!("  flow      {:>7.2} ms/tick", acc.flow / ticks);
@@ -211,7 +282,17 @@ fn main() {
             "  ------------------------\n  평균      {:>7.2} ms/tick   (예산 50.00)",
             acc.total() / ticks
         );
-        println!("  최악      {:>7.2} ms/tick", worst);
+        println!("  최악      {:>7.2} ms/tick  (t={})", worst, worst_tick);
+        println!(
+            "    그때: 이동 {:.1} 격자 {:.1} 전투 {:.1} 사격 {:.1} 공성 {:.1} 사기 {:.1} 경로 {:.1}",
+            worst_phase.movement,
+            worst_phase.grid,
+            worst_phase.combat,
+            worst_phase.shooting,
+            worst_phase.siege,
+            worst_phase.morale,
+            worst_phase.flow
+        );
         println!(
             "  실시간 배속 {:.1}x",
             (ticks / SIM_HZ as f64) / wall.max(1e-9)

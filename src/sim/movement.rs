@@ -125,18 +125,18 @@ pub fn step(w: &mut World) {
                 let mut push = [0.0f32, 0.0];
                 let mut fix = [0.0f32, 0.0];
                 let mut seen = 0u32;
-                grid.for_each_near(p, sep_r, |j| {
+                grid.for_each_near(p, sep_r, |it| {
                     if seen >= MAX_SEP_NEIGHBORS {
                         return;
                     }
-                    let j = j as usize;
+                    let j = it.idx as usize;
                     if j == i {
                         return;
                     }
-                    let d = [p[0] - pos[j][0], p[1] - pos[j][1]];
+                    let d = [p[0] - it.pos[0], p[1] - it.pos[1]];
                     let d2 = d[0] * d[0] + d[1] * d[1];
-                    let mut min_d = s.radius + stats(type_id[j]).radius;
-                    if pool.team[j] != my_team {
+                    let mut min_d = s.radius + stats(it.type_id).radius;
+                    if it.team != my_team {
                         min_d *= ENEMY_SPACING;
                     }
                     if d2 >= min_d * min_d {
@@ -183,12 +183,11 @@ pub fn step(w: &mut World) {
                 let mut sp = (nvel[0] * nvel[0] + nvel[1] * nvel[1]).sqrt();
 
                 // 발밑의 땅과 비탈이 속도를 정한다
-                let ground = terrain.at(p);
+                let (ground, grad) = terrain.ground_at(p);
                 let mut cap = speed * ground.speed_mult();
                 if sp > 1e-4 {
-                    let dir = [nvel[0] / sp, nvel[1] / sp];
-                    let slope = terrain.slope_along(p, dir);
-                    // 오르막은 다리를 무겁게, 내리막은 조금 가볍게
+                    // 진행 방향으로의 기울기. 오르막은 다리를 무겁게, 내리막은 조금 가볍게
+                    let slope = (grad[0] * nvel[0] + grad[1] * nvel[1]) / sp;
                     cap *= (1.0 - slope * 1.5).clamp(0.35, 1.25);
                 }
                 if sp > cap {

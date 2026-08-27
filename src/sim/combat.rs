@@ -96,21 +96,20 @@ pub fn step(w: &mut World) {
                     let mut best = f32::MAX;
                     let mut best_j = NO_TARGET;
                     let mut scanned = 0u32;
-                    grid.for_each_near(p, seek, |j| {
+                    grid.for_each_near(p, seek, |it| {
                         if scanned >= MAX_SCAN {
                             return;
                         }
-                        let ju = j as usize;
-                        if team[ju] == my_team || hp[ju] <= 0.0 {
+                        if it.team == my_team || hp[it.idx as usize] <= 0.0 {
                             return;
                         }
                         scanned += 1;
-                        let d = [pos[ju][0] - p[0], pos[ju][1] - p[1]];
+                        let d = [it.pos[0] - p[0], it.pos[1] - p[1]];
                         let d2 = d[0] * d[0] + d[1] * d[1];
                         // 동점이면 인덱스가 작은 쪽으로 — 순서 의존성을 없앤다
-                        if d2 < best || (d2 == best && j < best_j) {
+                        if d2 < best || (d2 == best && it.idx < best_j) {
                             best = d2;
-                            best_j = j;
+                            best_j = it.idx;
                         }
                     });
                     tgt = best_j;

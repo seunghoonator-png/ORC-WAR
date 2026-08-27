@@ -137,6 +137,7 @@ pub fn generate(world_size: f32, opts: MapOptions, seed: u64) -> TerrainMap {
 
     // 양측 배치 구역은 반드시 열어 둔다. 개전하자마자 절벽에 갇히면 곤란하다
     clear_deployment(&mut m, world_size);
+    m.bake_gradients();
     m
 }
 

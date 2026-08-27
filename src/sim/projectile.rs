@@ -177,10 +177,9 @@ fn fire(w: &mut World) {
 
                 // 코앞에 적이 있으면 활을 쏠 계제가 아니다
                 let mut threatened = false;
-                grid.for_each_near(p, MELEE_THRESHOLD, |j| {
-                    let ju = j as usize;
-                    if team[ju] != my_team {
-                        let d = [pos[ju][0] - p[0], pos[ju][1] - p[1]];
+                grid.for_each_near(p, MELEE_THRESHOLD, |it| {
+                    if it.team != my_team {
+                        let d = [it.pos[0] - p[0], it.pos[1] - p[1]];
                         if d[0] * d[0] + d[1] * d[1] < MELEE_THRESHOLD * MELEE_THRESHOLD {
                             threatened = true;
                         }
@@ -296,13 +295,12 @@ fn land(w: &mut World) {
         // 착탄 지점에서 가장 가까운 하나만 맞는다. 아군이 서 있으면 아군이 맞는다.
         let mut best = f32::MAX;
         let mut victim = NO_TARGET;
-        w.grid.for_each_near(at, HIT_RADIUS, |j| {
-            let ju = j as usize;
-            let d = [w.pool.pos[ju][0] - at[0], w.pool.pos[ju][1] - at[1]];
+        w.grid.for_each_near(at, HIT_RADIUS, |it| {
+            let d = [it.pos[0] - at[0], it.pos[1] - at[1]];
             let d2 = d[0] * d[0] + d[1] * d[1];
-            if d2 <= HIT_RADIUS * HIT_RADIUS && (d2 < best || (d2 == best && j < victim)) {
+            if d2 <= HIT_RADIUS * HIT_RADIUS && (d2 < best || (d2 == best && it.idx < victim)) {
                 best = d2;
-                victim = j;
+                victim = it.idx;
             }
         });
         if victim == NO_TARGET {
