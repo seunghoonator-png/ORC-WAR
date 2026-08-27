@@ -140,13 +140,19 @@ fn mirror_battle_stays_balanced() {
     // 완전히 같은 조건의 양군이라면 승패는 씨앗에 따라 갈려야 하고, 한쪽으로
     // 체계적으로 기울면 안 된다.
     //
-    // 이 테스트는 실제 버그를 두 개 잡아서 들어왔다.
-    //  - 피해를 한 패스로 적용해 "이미 죽은 대상에 대한 타격"이 팀 번호 순서대로
+    // 개별 전투의 편차는 원래 크다 — 전선이 한 번 무너지면 걷잡을 수 없이
+    // 벌어지기 때문이다. 그래서 평균만 보지 않고 표준오차로 나눈 z 값을 본다.
+    // 편차가 아무리 커도 방향이 무작위라면 z 는 0 근처에 머문다.
+    //
+    // 이 테스트는 실제 버그를 세 개 잡아서 들어왔다.
+    //  - 피해를 한 패스로 적용해 '이미 죽은 대상에 대한 타격'이 팀 번호 순서대로
     //    버려지면서, 먼저 처리되는 진영만 공격을 낭비했다.
     //  - 대형의 모자란 마지막 행이 항상 북쪽에 놓여, 남쪽 진영만 최전선에
     //    구멍이 뚫린 채 개전했다.
+    //  - 대상 탐색 반경이 넓어, 먼저 적을 포착한 쪽이 진형을 풀고 끌려나갔다.
+    const SEEDS: u64 = 16;
     let mut diffs = Vec::new();
-    for seed in 1..=6u64 {
+    for seed in 1..=SEEDS {
         let sc = Scenario::head_on(3_000, INF_SWORD, seed, 1_500);
         let mut w = sc.build();
         for _ in 0..1_500 {
@@ -154,14 +160,18 @@ fn mirror_battle_stays_balanced() {
         }
         let a = w.stats.alive[0] as f64;
         let b = w.stats.alive[1] as f64;
-        assert!(a + b > 0.0);
+        assert!(a + b > 0.0, "양군이 모두 사라졌다");
         diffs.push((a - b) / (a + b));
     }
-    let mean: f64 = diffs.iter().sum::<f64>() / diffs.len() as f64;
+    let n = diffs.len() as f64;
+    let mean: f64 = diffs.iter().sum::<f64>() / n;
+    let sd = (diffs.iter().map(|d| (d - mean).powi(2)).sum::<f64>() / n).sqrt();
+    let z = mean / (sd / n.sqrt()).max(1e-9);
     assert!(
-        mean.abs() < 0.10,
-        "거울 대칭 전투가 한쪽으로 기운다: 평균 편차 {:+.1}% (시드별 {:?})",
+        z.abs() < 3.0,
+        "거울 대칭 전투가 한쪽으로 기운다: 평균 {:+.1}%, z={:+.2} (시드별 {:?})",
         mean * 100.0,
+        z,
         diffs.iter().map(|d| (d * 100.0).round()).collect::<Vec<_>>()
     );
 }

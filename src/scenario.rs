@@ -75,6 +75,18 @@ impl Scenario {
         }
     }
 
+    /// 같은 대치를 동서 축으로 세운 것. 좌표축에 얽힌 편향을 가려내는 데 쓴다.
+    pub fn head_on_x(total: u32, type_id: u8, seed: u64, max_ticks: u64) -> Self {
+        let mut sc = Self::head_on(total, type_id, seed, max_ticks);
+        let mid = WORLD_SIZE * 0.5;
+        for f in sc.formations.iter_mut() {
+            let off = f.center[1] - mid;
+            f.center = [mid + off, mid];
+            f.front = [f.front[1], f.front[0]];
+        }
+        sc
+    }
+
     pub fn build(&self) -> World {
         let mut w = World::new(self.seed, self.total_units() as usize);
         for (fi, f) in self.formations.iter().enumerate() {

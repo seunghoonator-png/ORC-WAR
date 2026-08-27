@@ -13,19 +13,6 @@ const STEP_STRAIGHT: u32 = 10;
 const STEP_DIAG: u32 = 14;
 /// 도달 불가 표식
 pub const UNREACHABLE: u16 = u16::MAX;
-pub const NO_DIR: u8 = 255;
-
-/// 8방향 단위 벡터 (정규화됨)
-pub const DIRS: [[f32; 2]; 8] = [
-    [1.0, 0.0],
-    [0.707_106_8, 0.707_106_8],
-    [0.0, 1.0],
-    [-0.707_106_8, 0.707_106_8],
-    [-1.0, 0.0],
-    [-0.707_106_8, -0.707_106_8],
-    [0.0, -1.0],
-    [0.707_106_8, -0.707_106_8],
-];
 
 const OFFSETS: [(isize, isize, u32); 8] = [
     (1, 0, STEP_STRAIGHT),
@@ -63,8 +50,11 @@ pub struct FlowField {
     pub h: usize,
     pub cell: f32,
     pub integration: Vec<u16>,
-    /// 각 셀에서 목표로 향하는 방향(DIRS 인덱스), 255 = 없음
-    pub dir: Vec<u8>,
+    /// 각 셀에서 목표로 향하는 단위 벡터. [0,0] 이면 방향 없음(도착 또는 고립).
+    ///
+    /// 8방향으로 양자화하면 셀 경계마다 진행 방향이 뚝뚝 끊겨, 대형이 12m
+    /// 간격의 세로 빗살로 갈라진다. 적분장의 기울기를 그대로 쓰면 연속적이다.
+    pub dir: Vec<[f32; 2]>,
     heap: BinaryHeap<std::cmp::Reverse<(u32, u32)>>,
 }
 
@@ -75,7 +65,7 @@ impl FlowField {
             h: cf.h,
             cell: cf.cell,
             integration: vec![UNREACHABLE; cf.w * cf.h],
-            dir: vec![NO_DIR; cf.w * cf.h],
+            dir: vec![[0.0, 0.0]; cf.w * cf.h],
             heap: BinaryHeap::new(),
         }
     }
@@ -88,13 +78,34 @@ impl FlowField {
     }
 
     /// 유닛 위치에서 읽는 이동 방향. 목표에 도달했거나 길이 없으면 None.
+    ///
+    /// 인접 네 셀을 이중선형 보간해서 셀 경계를 넘을 때 방향이 튀지 않게 한다.
     #[inline(always)]
     pub fn dir_at(&self, p: [f32; 2]) -> Option<[f32; 2]> {
-        let d = self.dir[self.cell_of(p)];
-        if d == NO_DIR {
+        let fx = (p[0] / self.cell - 0.5).clamp(0.0, self.w as f32 - 1.001);
+        let fy = (p[1] / self.cell - 0.5).clamp(0.0, self.h as f32 - 1.001);
+        let x0 = fx as usize;
+        let y0 = fy as usize;
+        let tx = fx - x0 as f32;
+        let ty = fy - y0 as f32;
+        let x1 = (x0 + 1).min(self.w - 1);
+        let y1 = (y0 + 1).min(self.h - 1);
+
+        let a = self.dir[y0 * self.w + x0];
+        let b = self.dir[y0 * self.w + x1];
+        let c = self.dir[y1 * self.w + x0];
+        let d = self.dir[y1 * self.w + x1];
+        let mix = |p: [f32; 2], q: [f32; 2], t: f32| {
+            [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]
+        };
+        let top = mix(a, b, tx);
+        let bot = mix(c, d, tx);
+        let v = mix(top, bot, ty);
+        let len = (v[0] * v[0] + v[1] * v[1]).sqrt();
+        if len < 1e-3 {
             None
         } else {
-            Some(DIRS[d as usize])
+            Some([v[0] / len, v[1] / len])
         }
     }
 
@@ -140,35 +151,41 @@ impl FlowField {
         self.bake_directions(cf);
     }
 
-    /// 적분장에서 각 셀의 내리막 방향을 찾아 방향장으로 굽는다.
+    /// 적분장의 기울기를 내리막 방향으로 구워 방향장을 만든다.
     fn bake_directions(&mut self, cf: &CostField) {
         for cy in 0..self.h {
             for cx in 0..self.w {
                 let c = cy * self.w + cx;
-                if cf.cost[c] == IMPASSABLE || self.integration[c] == UNREACHABLE {
-                    self.dir[c] = NO_DIR;
+                if cf.cost[c] == IMPASSABLE
+                    || self.integration[c] == UNREACHABLE
+                    || self.integration[c] == 0
+                {
+                    self.dir[c] = [0.0, 0.0];
                     continue;
                 }
-                if self.integration[c] == 0 {
-                    self.dir[c] = NO_DIR; // 목표 도착
-                    continue;
-                }
-                let mut best = self.integration[c];
-                let mut best_dir = NO_DIR;
-                for (k, &(dx, dy, _)) in OFFSETS.iter().enumerate() {
-                    let nx = cx as isize + dx;
-                    let ny = cy as isize + dy;
-                    if nx < 0 || ny < 0 || nx >= self.w as isize || ny >= self.h as isize {
-                        continue;
+                let here = self.integration[c] as f32;
+                // 갈 수 없는 이웃은 자기 값으로 대체해 벽처럼 취급한다
+                let sample = |x: isize, y: isize| -> f32 {
+                    if x < 0 || y < 0 || x >= self.w as isize || y >= self.h as isize {
+                        return here;
                     }
-                    let n = ny as usize * self.w + nx as usize;
-                    let v = self.integration[n];
-                    if v < best {
-                        best = v;
-                        best_dir = k as u8;
+                    let n = y as usize * self.w + x as usize;
+                    if cf.cost[n] == IMPASSABLE || self.integration[n] == UNREACHABLE {
+                        here
+                    } else {
+                        self.integration[n] as f32
                     }
-                }
-                self.dir[c] = best_dir;
+                };
+                let (x, y) = (cx as isize, cy as isize);
+                let gx = sample(x + 1, y) - sample(x - 1, y);
+                let gy = sample(x, y + 1) - sample(x, y - 1);
+                let v = [-gx, -gy];
+                let len = (v[0] * v[0] + v[1] * v[1]).sqrt();
+                self.dir[c] = if len > 1e-6 {
+                    [v[0] / len, v[1] / len]
+                } else {
+                    [0.0, 0.0]
+                };
             }
         }
     }

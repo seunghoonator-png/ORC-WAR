@@ -7,6 +7,8 @@ use orc_war::sim::unit_types::INF_SWORD;
 fn main() {
     let units: u32 = std::env::args().nth(1).and_then(|s| s.parse().ok()).unwrap_or(5_000);
     let seed: u64 = std::env::args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(1);
+    let every: u64 = std::env::args().nth(3).and_then(|s| s.parse().ok()).unwrap_or(250);
+    let from: u64 = std::env::args().nth(4).and_then(|s| s.parse().ok()).unwrap_or(0);
 
     let sc = Scenario::head_on(units, INF_SWORD, seed, 20_000);
     let mut w = sc.build();
@@ -18,7 +20,7 @@ fn main() {
 
     for t in 0..20_000u64 {
         w.step();
-        if t % 250 != 0 {
+        if t % every != 0 || t < from {
             continue;
         }
         let mut alive = [0u32; 2];
