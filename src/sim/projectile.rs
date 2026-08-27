@@ -159,7 +159,8 @@ fn fire(w: &mut World) {
             let mut out = Vec::new();
             for i in lo..hi {
                 let s = stats(type_id[i]);
-                if s.range <= 0.0 || ammo[i] == 0 || !(tick + i as u64).is_multiple_of(FIRE_PERIOD) {
+                if s.range <= 0.0 || ammo[i] == 0 || !(tick + i as u64).is_multiple_of(FIRE_PERIOD)
+                {
                     continue;
                 }
                 if !matches!(state[i], UnitState::Advance | UnitState::Fight)

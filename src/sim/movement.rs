@@ -98,10 +98,25 @@ pub fn step(w: &mut World) {
                         // 교전 대상이 있으면 그쪽으로 파고든다
                         want = [d[0] / len, d[1] / len];
                     }
-                } else if let Some(ff) = flows.get(goal[i] as usize) {
-                    if let Some(d) = ff.dir_at(p) {
+                } else if s.range > 0.0 && pool.ammo[i] > 0 && pool.cooldown[i] > 0 {
+                    // 방금 쏘았다는 것은 사거리 안에 표적이 있다는 뜻이다.
+                    // 사수는 전열 뒤에서 자리를 지킨다.
+                    want = [0.0, 0.0];
+                } else {
+                    // 기병은 적 전열 정면이 아니라 무른 곳을 찾아 돈다.
+                    // 그런 표적이 남지 않았으면 전면 장으로 되돌아온다.
+                    let team_idx = pool.team[i] as usize;
+                    let mut dir = None;
+                    if s.is_cavalry {
+                        dir = flows.get(2 + team_idx).and_then(|ff| ff.dir_at(p));
+                    }
+                    if dir.is_none() {
+                        dir = flows.get(team_idx).and_then(|ff| ff.dir_at(p));
+                    }
+                    if let Some(d) = dir {
                         want = d;
                     }
+                    let _ = goal;
                 }
 
                 // --- 2. 이웃 분리 ---

@@ -31,6 +31,8 @@ pub const FLOW_CELL: f32 = 12.0;
 pub const CHUNK: usize = 4096;
 /// 목표 재평가 주기(틱)
 const AI_PERIOD: u64 = 10;
+/// 적 전열이 깔린 칸의 통행 비용 상한. 크게 잡을수록 기병이 멀리 돌아간다.
+const LINE_COST: u8 = 10;
 
 #[derive(Default, Clone)]
 pub struct BattleStats {
@@ -75,7 +77,12 @@ pub struct World {
     pub pool: UnitPool,
     pub grid: Grid,
     pub cost: CostField,
-    /// 팀별 플로우 필드 (인덱스 = 팀 번호)
+    /// 플로우 필드.
+    ///
+    /// 0,1 = 팀별 전면(모든 적)  ·  2,3 = 팀별 무른 표적(적 사수와 무너진 부대)
+    ///
+    /// 병종마다 다른 장을 읽게 하는 것이 교리의 핵심이다. 전부 같은 장을 보면
+    /// 경기병이 방패벽에 정면으로 박아 전멸한다.
     pub flows: Vec<FlowField>,
     pub tick: u64,
     pub seed: u64,
@@ -100,12 +107,19 @@ pub struct World {
     facing_next: Vec<f32>,
     flow_sources: Vec<usize>,
     flow_mark: Vec<bool>,
+    /// 기병용 경로 비용 — 지형에 적 전열의 두께를 얹은 것
+    flow_cost_scratch: CostField,
 }
 
 impl World {
     pub fn new(seed: u64, capacity: usize) -> Self {
         let cost = CostField::flat(WORLD_SIZE, FLOW_CELL);
-        let flows = vec![FlowField::new(&cost), FlowField::new(&cost)];
+        let flows = vec![
+            FlowField::new(&cost),
+            FlowField::new(&cost),
+            FlowField::new(&cost),
+            FlowField::new(&cost),
+        ];
         let ncells = cost.w * cost.h;
         Self {
             pool: UnitPool::with_capacity(capacity),
@@ -127,6 +141,7 @@ impl World {
             facing_next: Vec::with_capacity(capacity),
             flow_sources: Vec::new(),
             flow_mark: vec![false; ncells],
+            flow_cost_scratch: CostField::flat(WORLD_SIZE, FLOW_CELL),
         }
     }
 
@@ -141,21 +156,23 @@ impl World {
         self.grid.rebuild(&self.pool.pos, &self.alive);
         self.recount();
         self.start_strength = self.stats.alive;
-        // 첫 틱부터 유닛이 갈 곳을 알도록 양 팀 필드를 미리 굽는다
-        self.rebuild_flow(0);
-        self.rebuild_flow(1);
+        // 첫 틱부터 유닛이 갈 곳을 알도록 모든 장을 미리 굽는다
+        for i in 0..self.flows.len() {
+            self.rebuild_flow(i);
+        }
     }
 
     pub fn step(&mut self) {
         use std::time::Instant;
         self.death_events.clear();
 
-        // 1. 목표 재평가 — 한 틱에 한 팀씩 번갈아 갱신한다.
-        //    전선은 천천히 움직이므로 매 틱 두 장을 다시 굽는 건 낭비다.
+        // 1. 목표 재평가 — 한 틱에 한 장씩 돌아가며 갱신한다.
+        //    전선은 천천히 움직이므로 매 틱 전부 다시 굽는 건 낭비다.
         let t0 = Instant::now();
         if self.tick.is_multiple_of(AI_PERIOD) {
-            let t = ((self.tick / AI_PERIOD) % 2) as u8;
-            self.rebuild_flow(t);
+            let n = self.flows.len() as u64;
+            let which = ((self.tick / AI_PERIOD) % n) as usize;
+            self.rebuild_flow(which);
         }
         let t1 = Instant::now();
 
@@ -244,25 +261,38 @@ impl World {
         self.stats.fled = [c[4], c[5]];
     }
 
-    /// 상대 팀이 점유한 모든 셀을 목표로 하는 플로우 필드를 굽는다.
+    /// 상대가 점유한 셀들을 목표로 하는 플로우 필드를 굽는다.
     /// 한 점으로 모으는 대신 "가장 가까운 적"으로 향하게 되어 전선이 자연스럽게 선다.
-    fn rebuild_flow(&mut self, team: u8) {
+    ///
+    /// `idx` 가 2 이상이면 무른 표적(사수와 무너진 부대)만 목표로 삼는다.
+    fn rebuild_flow(&mut self, idx: usize) {
+        let team = (idx % 2) as u8;
+        let soft_only = idx >= 2;
         let Self {
             pool,
             flows,
             cost,
             flow_sources,
             flow_mark,
+            flow_cost_scratch,
             ..
         } = self;
 
         flow_sources.clear();
         flow_mark.iter_mut().for_each(|m| *m = false);
 
-        let ff = &flows[team as usize];
+        let ff = &flows[idx];
         for i in 0..pool.len() {
-            if pool.team[i] == team || pool.state[i] == UnitState::Dead {
+            if pool.team[i] == team || !pool.is_alive(i) {
                 continue;
+            }
+            if soft_only {
+                // 등을 보였거나, 활을 든 채 전열 뒤에 선 무리
+                let soft = pool.state[i] == UnitState::Rout
+                    || unit_types::stats(pool.type_id[i]).range > 0.0;
+                if !soft {
+                    continue;
+                }
             }
             let c = ff.cell_of(pool.pos[i]);
             if !flow_mark[c] {
@@ -270,7 +300,30 @@ impl World {
                 flow_sources.push(c);
             }
         }
-        flows[team as usize].compute(cost, flow_sources);
+
+        if !soft_only {
+            flows[idx].compute(cost, flow_sources);
+            return;
+        }
+
+        // 기병에게는 적 전열이 통과 비용이 큰 지형이나 마찬가지다.
+        // 이걸 반영하지 않으면 뒤에 선 사수를 노리랍시고 방패벽 한복판으로
+        // 걸어들어간다. 얹어 주면 비로소 옆으로 돌아 들어간다.
+        let scratch = flow_cost_scratch;
+        scratch.cost.copy_from_slice(&cost.cost);
+        for i in 0..pool.len() {
+            if pool.team[i] != team || !pool.is_alive(i) {
+                continue;
+            }
+            let st = unit_types::stats(pool.type_id[i]);
+            // 창칼을 든 채 대열을 지키는 무리만 장벽이 된다
+            if st.range > 0.0 || st.is_cavalry || pool.state[i] == UnitState::Rout {
+                continue;
+            }
+            let c = ff.cell_of(pool.pos[i]);
+            scratch.cost[c] = scratch.cost[c].saturating_add(2).min(LINE_COST);
+        }
+        flows[idx].compute(scratch, flow_sources);
     }
 
     pub fn outcome(&self, max_ticks: u64) -> Outcome {
