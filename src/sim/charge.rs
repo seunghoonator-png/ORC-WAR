@@ -60,6 +60,7 @@ pub fn step(w: &mut World) {
 
     let pos = &w.pool.pos;
     let vel = &w.pool.vel;
+    let terrain = &w.terrain;
     let facing = &w.pool.facing;
     let type_id = &w.pool.type_id;
     let target = &w.pool.target;
@@ -95,7 +96,7 @@ pub fn step(w: &mut World) {
                     continue;
                 }
 
-                if !s.is_cavalry {
+                if !s.is_cavalry || s.charge_power <= 0.0 {
                     continue;
                 }
 
@@ -114,13 +115,25 @@ pub fn step(w: &mut World) {
                 let reach = s.reach + stats(type_id[t]).radius;
 
                 if schunk[k] == UnitState::Charge {
+                    if !terrain.at(pos[i]).allows_charge() {
+                        // 나무 사이나 진창에 들어서면 그 자리에서 속도가 죽는다.
+                        // 진입만 막고 유지를 두면, 숲에서 오히려 돌격 상태가
+                        // 길어지는 뒤집힌 결과가 나온다.
+                        schunk[k] = UnitState::Advance;
+                        cchunk[k] = 0;
+                        continue;
+                    }
                     cchunk[k] = cchunk[k].saturating_add(1);
                     if cchunk[k] > CHARGE_MAX {
                         // 관성이 다 떨어졌다. 이제부터는 그냥 말 탄 보병이다
                         schunk[k] = UnitState::Fight;
                         cchunk[k] = 0;
                     }
-                } else if dist2 < CHARGE_TRIGGER * CHARGE_TRIGGER && dist2 > reach * reach {
+                } else if dist2 < CHARGE_TRIGGER * CHARGE_TRIGGER
+                    && dist2 > reach * reach
+                    && terrain.at(pos[i]).allows_charge()
+                {
+                    // 나무 사이나 진창에서는 말이 속도를 낼 수 없다
                     schunk[k] = UnitState::Charge;
                     cchunk[k] = 0;
                 }
@@ -190,7 +203,7 @@ pub fn step(w: &mut World) {
                 }
 
                 // 접촉 지점 주변을 통째로 휩쓴다
-                let power = s.melee_dmg * (1.0 + momentum * IMPACT_SCALE) * windup;
+                let power = s.melee_dmg * (1.0 + momentum * IMPACT_SCALE * s.charge_power) * windup;
                 let my_team = team[i];
                 let mut trampled = 0u32;
                 grid.for_each_near(pos[i], IMPACT_RADIUS, |j| {
@@ -230,6 +243,7 @@ pub fn step(w: &mut World) {
             let t = im.target as usize;
             let a = im.attacker as usize;
             if im.dmg > 0.0 {
+                w.stats.charge_impacts += 1;
                 let armor = stats(w.pool.type_id[t]).armor;
                 w.pool.hp[t] -= im.dmg * (1.0 - armor);
                 w.pool.stagger[t] = KNOCKDOWN;
@@ -251,6 +265,7 @@ pub fn step(w: &mut World) {
                 if w.pool.hp[u] <= 0.0 && w.pool.state[u] != UnitState::Dead {
                     w.pool.state[u] = UnitState::Dead;
                     w.pool.target[u] = NO_TARGET;
+                    w.pool.vel[u] = [0.0, 0.0];
                     deaths[w.pool.team[u] as usize] += 1;
                     w.death_events
                         .push((w.pool.pos[u], w.pool.team[u], w.pool.type_id[u]));

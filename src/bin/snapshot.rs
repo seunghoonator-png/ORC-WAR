@@ -7,6 +7,7 @@
 use std::fs::File;
 use std::io::{BufWriter, Write};
 
+use orc_war::map::Terrain;
 use orc_war::scenario::Scenario;
 use orc_war::sim::unit_types::stats;
 use orc_war::sim::World;
@@ -21,6 +22,8 @@ struct Canvas {
     horse: Vec<[u16; 2]>,
     /// 날고 있는 발사체
     shots: Vec<u8>,
+    /// 지형 바탕색 — 전투 전에 한 번만 굽는다
+    ground: Vec<[u8; 3]>,
     /// 시체 누적 — 전투가 지나간 자리는 지워지지 않는다
     corpses: Vec<u16>,
     view: [f32; 4],
@@ -32,6 +35,7 @@ impl Canvas {
             density: vec![[0; 2]; W * H],
             horse: vec![[0; 2]; W * H],
             shots: vec![0; W * H],
+            ground: vec![[26, 34, 24]; W * H],
             corpses: vec![0; W * H],
             view,
         }
@@ -46,6 +50,35 @@ impl Canvas {
             return None;
         }
         Some((v * H as f32) as usize * W + (u * W as f32) as usize)
+    }
+
+    /// 지형을 화소마다 미리 칠해 둔다.
+    fn bake_ground(&mut self, w: &World) {
+        let [x0, y0, x1, y1] = self.view;
+        for py in 0..H {
+            for px in 0..W {
+                let u = (px as f32 + 0.5) / W as f32;
+                let v = 1.0 - (py as f32 + 0.5) / H as f32;
+                let p = [x0 + (x1 - x0) * u, y0 + (y1 - y0) * v];
+                let t = w.terrain.at(p);
+                // 고도에 따라 밝기를 줘서 기복이 보이게 한다
+                let h = w.terrain.height_at(p);
+                let shade = (h * 0.5).clamp(-20.0, 70.0);
+                let base = match t {
+                    Terrain::Plain => [30.0, 42.0, 28.0],
+                    Terrain::Forest => [18.0, 40.0, 20.0],
+                    Terrain::Rock => [64.0, 62.0, 58.0],
+                    Terrain::Water => [22.0, 42.0, 78.0],
+                    Terrain::Ford => [58.0, 82.0, 96.0],
+                    Terrain::Marsh => [40.0, 44.0, 30.0],
+                };
+                self.ground[py * W + px] = [
+                    (base[0] + shade).clamp(0.0, 255.0) as u8,
+                    (base[1] + shade).clamp(0.0, 255.0) as u8,
+                    (base[2] + shade * 0.7).clamp(0.0, 255.0) as u8,
+                ];
+            }
+        }
     }
 
     fn accumulate_corpses(&mut self, w: &World) {
@@ -94,15 +127,14 @@ impl Canvas {
         for i in 0..W * H {
             let [a, b] = self.density[i];
             let corpse = self.corpses[i];
-            // 초원 바탕
-            let mut rgb = [26u8, 34, 24];
+            let mut rgb = self.ground[i];
             if corpse > 0 {
                 // 시체가 쌓일수록 검붉게 물든다
                 let k = ((corpse as f32 / 3.0).min(1.0) * 255.0) as u8;
                 rgb = [
-                    26 + (k as u16 * 46 / 255) as u8,
-                    34u8.saturating_sub(k / 12),
-                    24u8.saturating_sub(k / 14),
+                    rgb[0].saturating_add(k / 5),
+                    rgb[1].saturating_sub(k / 8),
+                    rgb[2].saturating_sub(k / 9),
                 ];
             }
             let ramp = |n: u16| -> f32 { (n as f32 / 2.5).min(1.0) };
@@ -146,8 +178,33 @@ fn main() -> std::io::Result<()> {
     let units: u32 = a.next().and_then(|s| s.parse().ok()).unwrap_or(60_000);
     let seed: u64 = a.next().and_then(|s| s.parse().ok()).unwrap_or(1);
     let out_dir = a.next().unwrap_or_else(|| ".".into());
+    let map_name = a.next().unwrap_or_else(|| "plains".into());
 
-    let sc = Scenario::combined_arms(units, seed, 20_000);
+    use orc_war::map::gen::{MapKind, MapOptions};
+    let opts = match map_name.as_str() {
+        "hills" => MapOptions {
+            kind: MapKind::Hills,
+            ..Default::default()
+        },
+        "mountain" => MapOptions {
+            kind: MapKind::Mountain,
+            ..Default::default()
+        },
+        "river" => MapOptions {
+            kind: MapKind::Plains,
+            river: true,
+            forest: true,
+            ..Default::default()
+        },
+        "forest" => MapOptions {
+            kind: MapKind::Plains,
+            forest: true,
+            rocks: true,
+            ..Default::default()
+        },
+        _ => MapOptions::default(),
+    };
+    let sc = Scenario::combined_arms(units, seed, 20_000).on_map(opts);
     let mut w = sc.build();
 
     // 개전 시점 배치를 다 담도록 시야를 잡고, 전투 내내 고정한다
@@ -171,6 +228,7 @@ fn main() -> std::io::Result<()> {
     }
     let _ = (&mut cx, &mut cy);
     let mut canvas = Canvas::new([cx - half_w, cy - half_h, cx + half_w, cy + half_h]);
+    canvas.bake_ground(&w);
 
     let shots = [0u64, 500, 800, 1000, 1400, 2200];
     let mut next = 0usize;

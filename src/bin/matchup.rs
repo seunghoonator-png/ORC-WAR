@@ -22,7 +22,31 @@ fn main() {
     }
 
     let max_ticks = 6_000;
-    let sc = Scenario::matchup((ta, na), (tb, nb), seed, max_ticks, gap);
+    use orc_war::map::gen::{MapKind, MapOptions};
+    let map = std::env::args().nth(7).unwrap_or_else(|| "plains".into());
+    let opts = match map.as_str() {
+        "hills" => MapOptions {
+            kind: MapKind::Hills,
+            ..Default::default()
+        },
+        "mountain" => MapOptions {
+            kind: MapKind::Mountain,
+            ..Default::default()
+        },
+        "river" => MapOptions {
+            kind: MapKind::Plains,
+            river: true,
+            ..Default::default()
+        },
+        "forest" => MapOptions {
+            kind: MapKind::Plains,
+            forest: true,
+            rocks: true,
+            ..Default::default()
+        },
+        _ => MapOptions::default(),
+    };
+    let sc = Scenario::matchup((ta, na), (tb, nb), seed, max_ticks, gap).on_map(opts);
     let mut w = sc.build();
     let outcome = loop {
         w.step();

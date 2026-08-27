@@ -44,6 +44,7 @@ pub fn step(w: &mut World) {
     let pool = &w.pool;
     let grid = &w.grid;
     let flows = &w.flows;
+    let terrain = &w.terrain;
     let tick = w.tick;
     let seed = w.seed;
 
@@ -179,10 +180,21 @@ pub fn step(w: &mut World) {
                     nv[1] *= ACCEL / steer;
                 }
                 let mut nvel = [v[0] + nv[0], v[1] + nv[1]];
-                let sp = (nvel[0] * nvel[0] + nvel[1] * nvel[1]).sqrt();
-                if sp > speed {
-                    nvel[0] *= speed / sp;
-                    nvel[1] *= speed / sp;
+                let mut sp = (nvel[0] * nvel[0] + nvel[1] * nvel[1]).sqrt();
+
+                // 발밑의 땅과 비탈이 속도를 정한다
+                let ground = terrain.at(p);
+                let mut cap = speed * ground.speed_mult();
+                if sp > 1e-4 {
+                    let dir = [nvel[0] / sp, nvel[1] / sp];
+                    let slope = terrain.slope_along(p, dir);
+                    // 오르막은 다리를 무겁게, 내리막은 조금 가볍게
+                    cap *= (1.0 - slope * 1.5).clamp(0.35, 1.25);
+                }
+                if sp > cap {
+                    nvel[0] *= cap / sp;
+                    nvel[1] *= cap / sp;
+                    sp = cap;
                 }
 
                 let fl = (fix[0] * fix[0] + fix[1] * fix[1]).sqrt();

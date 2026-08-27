@@ -14,6 +14,7 @@ pub mod unit_types;
 
 use rayon::prelude::*;
 
+use crate::map::{gen::MapOptions, TerrainMap};
 use flow::{CostField, FlowField};
 use grid::Grid;
 use morale::MoraleField;
@@ -43,6 +44,8 @@ pub struct BattleStats {
     pub fled: [u32; 2],
     /// 명중한 발사체 수
     pub shots_landed: u64,
+    /// 기병 충격이 실제로 꽂힌 횟수
+    pub charge_impacts: u64,
     /// 틱별 생존 수 — 결과 리포트 그래프용
     pub history: Vec<[u32; 2]>,
 }
@@ -77,6 +80,7 @@ pub struct World {
     pub pool: UnitPool,
     pub grid: Grid,
     pub cost: CostField,
+    pub terrain: TerrainMap,
     /// 플로우 필드.
     ///
     /// 0,1 = 팀별 전면(모든 적)  ·  2,3 = 팀별 무른 표적(적 사수와 무너진 부대)
@@ -125,6 +129,7 @@ impl World {
             pool: UnitPool::with_capacity(capacity),
             grid: Grid::new(WORLD_SIZE, GRID_CELL),
             cost,
+            terrain: TerrainMap::flat(WORLD_SIZE),
             flows,
             tick: 0,
             seed,
@@ -142,6 +147,32 @@ impl World {
             flow_sources: Vec::new(),
             flow_mark: vec![false; ncells],
             flow_cost_scratch: CostField::flat(WORLD_SIZE, FLOW_CELL),
+        }
+    }
+
+    /// 지형을 깔고 경로 비용을 다시 굽는다. 스폰 전에 호출해야 한다.
+    pub fn set_terrain(&mut self, opts: MapOptions, seed: u64) {
+        self.terrain = crate::map::gen::generate(WORLD_SIZE, opts, seed);
+        self.rebuild_cost();
+    }
+
+    /// 지형에서 경로탐색 비용을 만든다.
+    fn rebuild_cost(&mut self) {
+        let cf = &mut self.cost;
+        for cy in 0..cf.h {
+            for cx in 0..cf.w {
+                let p = [(cx as f32 + 0.5) * cf.cell, (cy as f32 + 0.5) * cf.cell];
+                let t = self.terrain.at(p);
+                let mut c = t.path_cost();
+                if c != crate::sim::flow::IMPASSABLE {
+                    // 가파른 비탈은 돌아가는 편이 빠르다
+                    let gx = self.terrain.slope_along(p, [1.0, 0.0]).abs();
+                    let gy = self.terrain.slope_along(p, [0.0, 1.0]).abs();
+                    let steep = gx.max(gy);
+                    c = c.saturating_add((steep * 9.0) as u8);
+                }
+                cf.cost[cy * cf.w + cx] = c;
+            }
         }
     }
 

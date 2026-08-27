@@ -2,6 +2,7 @@
 //!
 //! 유저가 UI로 만드는 값이자, 헤드리스 회귀 테스트가 코드로 만드는 값이다.
 
+use crate::map::gen::MapOptions;
 use crate::sim::pool::UnitPool;
 use crate::sim::unit_types::stats;
 use crate::sim::{World, WORLD_SIZE};
@@ -30,6 +31,7 @@ pub struct Scenario {
     pub seed: u64,
     pub formations: Vec<Formation>,
     pub max_ticks: u64,
+    pub map: MapOptions,
 }
 
 impl Scenario {
@@ -72,7 +74,14 @@ impl Scenario {
                 },
             ],
             max_ticks,
+            map: MapOptions::default(),
         }
+    }
+
+    /// 지형을 지정한다.
+    pub fn on_map(mut self, opts: MapOptions) -> Self {
+        self.map = opts;
+        self
     }
 
     /// 여러 병종을 섞은 전형적인 야전 편성. 앞에 보병, 뒤에 사수, 양익에 기병.
@@ -136,6 +145,7 @@ impl Scenario {
             seed,
             formations,
             max_ticks,
+            map: MapOptions::default(),
         }
     }
 
@@ -163,6 +173,7 @@ impl Scenario {
             seed,
             formations: vec![make(a, 0, [0.0, 1.0]), make(b, 1, [0.0, -1.0])],
             max_ticks,
+            map: MapOptions::default(),
         }
     }
 
@@ -180,6 +191,7 @@ impl Scenario {
 
     pub fn build(&self) -> World {
         let mut w = World::new(self.seed, self.total_units() as usize);
+        w.set_terrain(self.map, self.seed);
         for (fi, f) in self.formations.iter().enumerate() {
             spawn_block(&mut w.pool, f, self.seed, fi as u64);
         }

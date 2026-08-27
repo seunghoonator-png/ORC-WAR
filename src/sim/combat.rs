@@ -129,11 +129,19 @@ pub fn step(w: &mut World) {
                 let dist2 = d[0] * d[0] + d[1] * d[1];
                 let reach = s.reach + stats(type_id[t]).radius;
 
+                // 돌격 중인 기병의 상태는 charge 단계가 쥐고 있다. 여기서
+                // 덮어쓰면 가속 카운터가 매 틱 0으로 되돌아가 충격이 영영
+                // 실리지 않는다.
+                let charging = schunk[k] == UnitState::Charge;
                 if dist2 > reach * reach {
-                    schunk[k] = UnitState::Advance;
+                    if !charging {
+                        schunk[k] = UnitState::Advance;
+                    }
                     continue;
                 }
-                schunk[k] = UnitState::Fight;
+                if !charging {
+                    schunk[k] = UnitState::Fight;
+                }
                 if cchunk[k] > 0 || stagger[i] > 0 {
                     continue;
                 }
@@ -177,6 +185,7 @@ pub fn step(w: &mut World) {
             if w.pool.hp[t] <= 0.0 && w.pool.state[t] != UnitState::Dead {
                 w.pool.state[t] = UnitState::Dead;
                 w.pool.target[t] = NO_TARGET;
+                w.pool.vel[t] = [0.0, 0.0];
                 deaths[w.pool.team[t] as usize] += 1;
                 w.death_events
                     .push((w.pool.pos[t], w.pool.team[t], w.pool.type_id[t]));

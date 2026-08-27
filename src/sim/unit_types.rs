@@ -45,6 +45,12 @@ pub struct UnitStats {
     pub ammo: u16,
     pub morale_base: u8,
     pub is_cavalry: bool,
+    /// 돌격 충격에 실리는 비율.
+    ///
+    /// 말을 탔다고 다 같은 돌격이 아니다. 랜스를 겨누고 마갑을 두른 중장기병만
+    /// 대열을 뚫는다. 사브르를 든 경기병에게 같은 계수를 주면 경기병이 방패벽을
+    /// 정면으로 밀어버리는, 기획과 어긋난 결과가 나온다.
+    pub charge_power: f32,
     /// 장창 브레이스 가능 여부
     pub can_brace: bool,
 }
@@ -75,6 +81,7 @@ pub static UNIT_STATS: [UnitStats; N_TYPES] = [
         ammo: 0,
         morale_base: 100,
         is_cavalry: false,
+        charge_power: 0.0,
         can_brace: false,
     },
     UnitStats {
@@ -92,6 +99,7 @@ pub static UNIT_STATS: [UnitStats; N_TYPES] = [
         ammo: 0,
         morale_base: 100,
         is_cavalry: false,
+        charge_power: 0.0,
         can_brace: true,
     },
     UnitStats {
@@ -109,6 +117,7 @@ pub static UNIT_STATS: [UnitStats; N_TYPES] = [
         ammo: 0,
         morale_base: 110,
         is_cavalry: false,
+        charge_power: 0.0,
         can_brace: false,
     },
     UnitStats {
@@ -126,6 +135,7 @@ pub static UNIT_STATS: [UnitStats; N_TYPES] = [
         ammo: 24,
         morale_base: 80,
         is_cavalry: false,
+        charge_power: 0.0,
         can_brace: false,
     },
     UnitStats {
@@ -143,6 +153,7 @@ pub static UNIT_STATS: [UnitStats; N_TYPES] = [
         ammo: 20,
         morale_base: 85,
         is_cavalry: false,
+        charge_power: 0.0,
         can_brace: false,
     },
     UnitStats {
@@ -160,6 +171,7 @@ pub static UNIT_STATS: [UnitStats; N_TYPES] = [
         ammo: 0,
         morale_base: 95,
         is_cavalry: true,
+        charge_power: 0.3,
         can_brace: false,
     },
     UnitStats {
@@ -177,6 +189,7 @@ pub static UNIT_STATS: [UnitStats; N_TYPES] = [
         ammo: 0,
         morale_base: 120,
         is_cavalry: true,
+        charge_power: 1.0,
         can_brace: false,
     },
     UnitStats {
@@ -194,6 +207,7 @@ pub static UNIT_STATS: [UnitStats; N_TYPES] = [
         ammo: 20,
         morale_base: 90,
         is_cavalry: true,
+        charge_power: 0.2,
         can_brace: false,
     },
 ];

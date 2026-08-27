@@ -148,6 +148,7 @@ fn fire(w: &mut World) {
     let state = &w.pool.state;
     let stagger = &w.pool.stagger;
     let cooldown = w.pool.cooldown.clone();
+    let terrain = &w.terrain;
     let ammo = w.pool.ammo.clone();
 
     // 각 사수가 어디를 겨눌지 고른다
@@ -187,9 +188,11 @@ fn fire(w: &mut World) {
                     continue;
                 }
 
+                // 높은 데 선 사수는 더 멀리 쏜다
+                let elev = terrain.height_at(p);
                 // 사거리 안에서 표적을 하나 고른다. 굳이 가장 가까운 적을
                 // 찾지 않는다 — 화살은 사람을 조준하기보다 대열을 향해 쏜다.
-                let r = s.range;
+                let r = s.range * (1.0 + (elev * 0.004).clamp(0.0, 0.35));
                 let mut pick: Option<[f32; 2]> = None;
                 let mut seen = 0u32;
                 let want = 1 + crate::rng::below(seed ^ 0xA110, tick, i as u64, 8);
@@ -296,6 +299,14 @@ fn land(w: &mut World) {
         let s = stats(w.pool.type_id[v]);
 
         // 방패는 화살을 상당히 막아준다. 다만 곡사로 떨어지는 것은 절반만.
+        // 나뭇가지에 걸린다
+        let cover = w.terrain.at(at).arrow_block();
+        if cover > 0.0 {
+            let roll = crate::rng::unit_f32(seed ^ 0xC0FE, tick, victim as u64);
+            if roll < cover {
+                continue;
+            }
+        }
         let mut d = dmg;
         if s.shield > 0.0 {
             let roll = crate::rng::unit_f32(seed ^ 0xB0B0, tick, victim as u64);
@@ -323,6 +334,7 @@ fn land(w: &mut World) {
         if w.pool.hp[vu] <= 0.0 && w.pool.state[vu] != UnitState::Dead {
             w.pool.state[vu] = UnitState::Dead;
             w.pool.target[vu] = NO_TARGET;
+            w.pool.vel[vu] = [0.0, 0.0];
             deaths[w.pool.team[vu] as usize] += 1;
             w.death_events
                 .push((w.pool.pos[vu], w.pool.team[vu], w.pool.type_id[vu]));
