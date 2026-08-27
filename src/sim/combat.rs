@@ -85,7 +85,7 @@ pub fn step(w: &mut World) {
                 }
 
                 // 재탐색 (위상 분산)
-                if tgt == NO_TARGET && (tick + i as u64) % RETARGET_PERIOD == 0 {
+                if tgt == NO_TARGET && (tick + i as u64).is_multiple_of(RETARGET_PERIOD) {
                     let seek = s.reach + SEEK_MARGIN;
                     let mut best = f32::MAX;
                     let mut best_j = NO_TARGET;
@@ -161,7 +161,8 @@ pub fn step(w: &mut World) {
                 w.pool.state[t] = UnitState::Dead;
                 w.pool.target[t] = NO_TARGET;
                 deaths[w.pool.team[t] as usize] += 1;
-                w.death_events.push((w.pool.pos[t], w.pool.team[t], w.pool.type_id[t]));
+                w.death_events
+                    .push((w.pool.pos[t], w.pool.team[t], w.pool.type_id[t]));
             }
         }
     }

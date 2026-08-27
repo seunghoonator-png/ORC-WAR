@@ -1,0 +1,51 @@
+name: build
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: 테스트 (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: 서식 검사
+        run: cargo fmt --check
+      - name: 린트
+        run: cargo clippy --all-targets -- -D warnings
+      - name: 테스트
+        run: cargo test --release
+
+  windows:
+    name: Windows 실행파일
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: 빌드 (MSVC)
+        run: cargo build --release
+      - name: 스모크 테스트
+        run: cargo run --release -- -n 20000 -t 300 --bench -q
+      - name: 배포 폴더 구성
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path package | Out-Null
+          Copy-Item target/release/orc-war.exe package/
+          Copy-Item target/release/snapshot.exe package/
+          Copy-Item dist/*.bat package/
+          Copy-Item dist/*.txt package/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: orc-war-windows
+          path: package/

@@ -5,8 +5,7 @@
 
 #[inline(always)]
 pub fn hash3(a: u64, b: u64, c: u64) -> u64 {
-    let mut x = a
-        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+    let mut x = a.wrapping_mul(0x9E37_79B9_7F4A_7C15)
         ^ b.wrapping_mul(0xBF58_476D_1CE4_E5B9)
         ^ c.wrapping_mul(0x94D0_49BB_1331_11EB);
     x ^= x >> 30;

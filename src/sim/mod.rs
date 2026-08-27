@@ -130,7 +130,7 @@ impl World {
         // 1. 목표 재평가 — 한 틱에 한 팀씩 번갈아 갱신한다.
         //    전선은 천천히 움직이므로 매 틱 두 장을 다시 굽는 건 낭비다.
         let t0 = Instant::now();
-        if self.tick % AI_PERIOD == 0 {
+        if self.tick.is_multiple_of(AI_PERIOD) {
             let t = ((self.tick / AI_PERIOD) % 2) as u8;
             self.rebuild_flow(t);
         }
@@ -158,7 +158,7 @@ impl World {
 
         // 5. 정리
         self.tick += 1;
-        if self.tick % 5 == 0 {
+        if self.tick.is_multiple_of(5) {
             self.recount();
             let a = self.stats.alive;
             self.stats.history.push(a);

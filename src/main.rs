@@ -9,6 +9,33 @@ use orc_war::scenario::Scenario;
 use orc_war::sim::unit_types::{stats, INF_SWORD};
 use orc_war::sim::{Outcome, SIM_HZ};
 
+/// Windows 콘솔은 기본 코드페이지가 CP949 라 UTF-8 출력이 깨진다.
+#[cfg(windows)]
+fn setup_console() {
+    extern "system" {
+        fn SetConsoleOutputCP(code_page: u32) -> i32;
+    }
+    const CP_UTF8: u32 = 65001;
+    unsafe {
+        SetConsoleOutputCP(CP_UTF8);
+    }
+}
+
+#[cfg(not(windows))]
+fn setup_console() {}
+
+/// 탐색기에서 더블클릭해 띄웠다면 결과를 읽기도 전에 창이 닫힌다.
+#[cfg(windows)]
+fn hold_window_open() {
+    use std::io::{Read, Write};
+    print!("\n계속하려면 Enter 를 누르세요...");
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stdin().read(&mut [0u8]);
+}
+
+#[cfg(not(windows))]
+fn hold_window_open() {}
+
 struct Args {
     units: u32,
     ticks: u64,
@@ -75,6 +102,9 @@ fn parse_args() -> Args {
 }
 
 fn main() {
+    setup_console();
+    // 인자 없이 실행 = 탐색기에서 더블클릭한 경우로 본다
+    let launched_bare = std::env::args().len() == 1;
     let args = parse_args();
     let mut sc = Scenario::head_on(args.units, INF_SWORD, args.seed, args.ticks);
     if args.flip {
@@ -116,7 +146,7 @@ fn main() {
         acc.combat += p.combat;
         worst = worst.max(p.total());
 
-        if !args.quiet && w.tick % 100 == 0 {
+        if !args.quiet && w.tick.is_multiple_of(100) {
             println!(
                 "  t={:>5} ({:>4.0}s)  생존 {:>7} / {:>7}   전사 {:>7} / {:>7}   {:>5.1} ms/tick",
                 w.tick,
@@ -172,5 +202,14 @@ fn main() {
             "  실시간 배속 {:.1}x",
             (ticks / SIM_HZ as f64) / wall.max(1e-9)
         );
+    }
+
+    if launched_bare {
+        println!(
+            "\n더 큰 전투를 보려면 명령 프롬프트에서:\n  \
+             orc-war.exe -n 300000 --bench\n  \
+             orc-war.exe --help"
+        );
+        hold_window_open();
     }
 }

@@ -5,10 +5,22 @@ use orc_war::sim::pool::{UnitState, NO_TARGET};
 use orc_war::sim::unit_types::INF_SWORD;
 
 fn main() {
-    let units: u32 = std::env::args().nth(1).and_then(|s| s.parse().ok()).unwrap_or(5_000);
-    let seed: u64 = std::env::args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(1);
-    let every: u64 = std::env::args().nth(3).and_then(|s| s.parse().ok()).unwrap_or(250);
-    let from: u64 = std::env::args().nth(4).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let units: u32 = std::env::args()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(5_000);
+    let seed: u64 = std::env::args()
+        .nth(2)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    let every: u64 = std::env::args()
+        .nth(3)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(250);
+    let from: u64 = std::env::args()
+        .nth(4)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
 
     let sc = Scenario::head_on(units, INF_SWORD, seed, 20_000);
     let mut w = sc.build();
@@ -51,8 +63,15 @@ fn main() {
         }
         println!(
             "{:>6} {:>7} {:>7} {:>8.1} {:>8.1} {:>7} {:>7} {:>8.1} {:>8.1}",
-            t, alive[0], alive[1], front0, front1, fighting[0], fighting[1],
-            cg[0] / alive[0] as f64, cg[1] / alive[1] as f64
+            t,
+            alive[0],
+            alive[1],
+            front0,
+            front1,
+            fighting[0],
+            fighting[1],
+            cg[0] / alive[0] as f64,
+            cg[1] / alive[1] as f64
         );
     }
 }

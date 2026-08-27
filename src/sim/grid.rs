@@ -47,10 +47,10 @@ impl Grid {
 
     #[inline(always)]
     pub fn cell_coords(&self, p: [f32; 2]) -> (usize, usize) {
-        let cx = (((p[0] - self.origin[0]) / self.cell_size) as isize)
-            .clamp(0, self.w as isize - 1) as usize;
-        let cy = (((p[1] - self.origin[1]) / self.cell_size) as isize)
-            .clamp(0, self.h as isize - 1) as usize;
+        let cx = (((p[0] - self.origin[0]) / self.cell_size) as isize).clamp(0, self.w as isize - 1)
+            as usize;
+        let cy = (((p[1] - self.origin[1]) / self.cell_size) as isize).clamp(0, self.h as isize - 1)
+            as usize;
         (cx, cy)
     }
 

@@ -78,7 +78,11 @@ pub fn step(w: &mut World) {
                 let mut want = [0.0f32, 0.0];
                 if state[i] == UnitState::Rout {
                     // 패주병은 아군 후방(맵 가장자리)으로 도주한다
-                    want = if my_team == 0 { [0.0, -1.0] } else { [0.0, 1.0] };
+                    want = if my_team == 0 {
+                        [0.0, -1.0]
+                    } else {
+                        [0.0, 1.0]
+                    };
                 } else if target[i] != NO_TARGET {
                     // 교전 대상이 있으면 그쪽으로 파고든다
                     let t = target[i] as usize;

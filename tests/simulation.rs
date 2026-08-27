@@ -172,6 +172,9 @@ fn mirror_battle_stays_balanced() {
         "거울 대칭 전투가 한쪽으로 기운다: 평균 {:+.1}%, z={:+.2} (시드별 {:?})",
         mean * 100.0,
         z,
-        diffs.iter().map(|d| (d * 100.0).round()).collect::<Vec<_>>()
+        diffs
+            .iter()
+            .map(|d| (d * 100.0).round())
+            .collect::<Vec<_>>()
     );
 }

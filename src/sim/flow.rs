@@ -95,9 +95,8 @@ impl FlowField {
         let b = self.dir[y0 * self.w + x1];
         let c = self.dir[y1 * self.w + x0];
         let d = self.dir[y1 * self.w + x1];
-        let mix = |p: [f32; 2], q: [f32; 2], t: f32| {
-            [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]
-        };
+        let mix =
+            |p: [f32; 2], q: [f32; 2], t: f32| [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t];
         let top = mix(a, b, tx);
         let bot = mix(c, d, tx);
         let v = mix(top, bot, ty);
