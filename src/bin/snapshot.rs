@@ -24,6 +24,8 @@ struct Canvas {
     shots: Vec<u8>,
     /// 지형 바탕색 — 전투 전에 한 번만 굽는다
     ground: Vec<[u8; 3]>,
+    /// 가까이 당겨 볼 때 유닛을 두껍게 찍는다
+    fat: bool,
     /// 시체 누적 — 전투가 지나간 자리는 지워지지 않는다
     corpses: Vec<u16>,
     view: [f32; 4],
@@ -36,6 +38,7 @@ impl Canvas {
             horse: vec![[0; 2]; W * H],
             shots: vec![0; W * H],
             ground: vec![[26, 34, 24]; W * H],
+            fat: false,
             corpses: vec![0; W * H],
             view,
         }
@@ -99,9 +102,23 @@ impl Canvas {
             }
             if let Some(px) = self.to_px(w.pool.pos[i]) {
                 let t = w.pool.team[i] as usize;
+                let cav = stats(w.pool.type_id[i]).is_cavalry;
                 self.density[px][t] = self.density[px][t].saturating_add(1);
-                if stats(w.pool.type_id[i]).is_cavalry {
+                if cav {
                     self.horse[px][t] = self.horse[px][t].saturating_add(1);
+                }
+                // 화소당 미터가 작을 때는 한 점으로는 보이지 않는다
+                if self.fat {
+                    for (dx, dy) in [(1i32, 0i32), (0, 1), (1, 1)] {
+                        let q = px as i64 + dy as i64 * W as i64 + dx as i64;
+                        if q >= 0 && (q as usize) < W * H {
+                            let q = q as usize;
+                            self.density[q][t] = self.density[q][t].saturating_add(1);
+                            if cav {
+                                self.horse[q][t] = self.horse[q][t].saturating_add(1);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -179,6 +196,11 @@ fn main() -> std::io::Result<()> {
     let seed: u64 = a.next().and_then(|s| s.parse().ok()).unwrap_or(1);
     let out_dir = a.next().unwrap_or_else(|| ".".into());
     let map_name = a.next().unwrap_or_else(|| "plains".into());
+    // 몇 틱마다, 몇 장을 뽑을지 — 애니메이션용
+    let every: u64 = a.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let count: u64 = a.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    // 전장 한복판을 이 폭(m)으로 잘라 본다. 0이면 전체를 담는다.
+    let zoom_w: f32 = a.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
 
     use orc_war::map::gen::{MapKind, MapOptions};
     let opts = match map_name.as_str() {
@@ -227,15 +249,24 @@ fn main() -> std::io::Result<()> {
         half_h = half_w / aspect;
     }
     let _ = (&mut cx, &mut cy);
+    if zoom_w > 0.0 {
+        half_w = zoom_w * 0.5;
+        half_h = half_w / aspect;
+    }
     let mut canvas = Canvas::new([cx - half_w, cy - half_h, cx + half_w, cy + half_h]);
+    canvas.fat = (half_w * 2.0 / W as f32) < 0.6;
     canvas.bake_ground(&w);
 
-    let shots = [0u64, 500, 800, 1000, 1400, 2200];
+    let shots: Vec<u64> = if every > 0 && count > 0 {
+        (0..count).map(|i| i * every).collect()
+    } else {
+        vec![0, 500, 800, 1000, 1400, 2200]
+    };
     let mut next = 0usize;
     for t in 0..=*shots.last().unwrap() {
         if next < shots.len() && t == shots[next] {
             canvas.snap_units(&w);
-            let path = format!("{out_dir}/frame_{:04}.ppm", shots[next]);
+            let path = format!("{out_dir}/frame_{:05}.ppm", shots[next]);
             canvas.write_ppm(&path)?;
             println!(
                 "{path}  t={:<5} 생존 {:>7} / {:>7}",
