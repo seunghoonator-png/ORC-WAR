@@ -4,7 +4,7 @@
 
 use crate::sim::SIM_HZ;
 
-pub const N_TYPES: usize = 8;
+pub const N_TYPES: usize = 11;
 
 // 병종 인덱스 상수
 pub const INF_SWORD: u8 = 0;
@@ -15,6 +15,10 @@ pub const CROSSBOW: u8 = 4;
 pub const CAV_LIGHT: u8 = 5;
 pub const CAV_HEAVY: u8 = 6;
 pub const CAV_ARCHER: u8 = 7;
+// --- 공성병기 ---
+pub const RAM: u8 = 8;
+pub const CATAPULT: u8 = 9;
+pub const LADDER: u8 = 10;
 
 #[derive(Clone, Copy, Debug)]
 pub struct UnitStats {
@@ -53,6 +57,10 @@ pub struct UnitStats {
     pub charge_power: f32,
     /// 장창 브레이스 가능 여부
     pub can_brace: bool,
+    /// 성벽·성문에 주는 피해. 사람을 베는 무기로는 돌벽을 어쩌지 못한다.
+    pub siege_dmg: f32,
+    /// 성벽 등반을 돕는 장비인가
+    pub is_ladder: bool,
 }
 
 /// 공속(회/초) → 쿨다운 틱
@@ -83,6 +91,8 @@ pub static UNIT_STATS: [UnitStats; N_TYPES] = [
         is_cavalry: false,
         charge_power: 0.0,
         can_brace: false,
+        siege_dmg: 1.0,
+        is_ladder: false,
     },
     UnitStats {
         name: "장창병",
@@ -101,6 +111,8 @@ pub static UNIT_STATS: [UnitStats; N_TYPES] = [
         is_cavalry: false,
         charge_power: 0.0,
         can_brace: true,
+        siege_dmg: 1.0,
+        is_ladder: false,
     },
     UnitStats {
         name: "중갑 도끼병",
@@ -119,6 +131,8 @@ pub static UNIT_STATS: [UnitStats; N_TYPES] = [
         is_cavalry: false,
         charge_power: 0.0,
         can_brace: false,
+        siege_dmg: 6.0,
+        is_ladder: false,
     },
     UnitStats {
         name: "궁수",
@@ -137,6 +151,8 @@ pub static UNIT_STATS: [UnitStats; N_TYPES] = [
         is_cavalry: false,
         charge_power: 0.0,
         can_brace: false,
+        siege_dmg: 1.0,
+        is_ladder: false,
     },
     UnitStats {
         name: "석궁수",
@@ -155,6 +171,8 @@ pub static UNIT_STATS: [UnitStats; N_TYPES] = [
         is_cavalry: false,
         charge_power: 0.0,
         can_brace: false,
+        siege_dmg: 1.0,
+        is_ladder: false,
     },
     UnitStats {
         name: "경기병",
@@ -173,6 +191,8 @@ pub static UNIT_STATS: [UnitStats; N_TYPES] = [
         is_cavalry: true,
         charge_power: 0.3,
         can_brace: false,
+        siege_dmg: 1.0,
+        is_ladder: false,
     },
     UnitStats {
         name: "중기병",
@@ -191,6 +211,8 @@ pub static UNIT_STATS: [UnitStats; N_TYPES] = [
         is_cavalry: true,
         charge_power: 1.0,
         can_brace: false,
+        siege_dmg: 1.0,
+        is_ladder: false,
     },
     UnitStats {
         name: "궁기병",
@@ -209,8 +231,76 @@ pub static UNIT_STATS: [UnitStats; N_TYPES] = [
         is_cavalry: true,
         charge_power: 0.2,
         can_brace: false,
+        siege_dmg: 1.0,
+        is_ladder: false,
+    },
+    UnitStats {
+        name: "파성추",
+        hp: 2500.0,
+        melee_dmg: 0.0,
+        attack_period: period(0.5),
+        reach: 6.0,
+        range: 0.0,
+        speed: 0.6,
+        armor: 0.55,
+        shield: 0.0,
+        mass: 8.0,
+        radius: 3.0,
+        ammo: 0,
+        morale_base: 255,
+        is_cavalry: false,
+        charge_power: 0.0,
+        can_brace: false,
+        siege_dmg: 500.0,
+        is_ladder: false,
+    },
+    UnitStats {
+        name: "투석기",
+        hp: 800.0,
+        melee_dmg: 0.0,
+        attack_period: period(0.09),
+        reach: 4.0,
+        range: 400.0,
+        speed: 0.4,
+        armor: 0.1,
+        shield: 0.0,
+        mass: 6.0,
+        radius: 3.0,
+        ammo: 40,
+        morale_base: 255,
+        is_cavalry: false,
+        charge_power: 0.0,
+        can_brace: false,
+        siege_dmg: 260.0,
+        is_ladder: false,
+    },
+    UnitStats {
+        name: "공성 사다리",
+        hp: 300.0,
+        melee_dmg: 0.0,
+        attack_period: period(1.0),
+        reach: 5.0,
+        range: 0.0,
+        speed: 1.1,
+        armor: 0.2,
+        shield: 0.0,
+        mass: 2.0,
+        radius: 1.6,
+        ammo: 0,
+        morale_base: 255,
+        is_cavalry: false,
+        charge_power: 0.0,
+        can_brace: false,
+        siege_dmg: 0.0,
+        is_ladder: true,
     },
 ];
+
+/// 공성병기인가 — 사람이 아니라 장비다. 사기도 없고 도망치지도 않는다.
+#[inline(always)]
+pub fn is_engine(type_id: u8) -> bool {
+    type_id >= RAM
+}
 
 #[inline(always)]
 pub fn stats(type_id: u8) -> &'static UnitStats {

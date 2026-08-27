@@ -74,6 +74,10 @@ impl Canvas {
                     Terrain::Water => [22.0, 42.0, 78.0],
                     Terrain::Ford => [58.0, 82.0, 96.0],
                     Terrain::Marsh => [40.0, 44.0, 30.0],
+                    Terrain::Wall => [150.0, 146.0, 136.0],
+                    Terrain::Gate => [110.0, 82.0, 48.0],
+                    Terrain::Rubble => [96.0, 90.0, 82.0],
+                    Terrain::Moat => [26.0, 46.0, 72.0],
                 };
                 self.ground[py * W + px] = [
                     (base[0] + shade).clamp(0.0, 255.0) as u8,
@@ -226,7 +230,13 @@ fn main() -> std::io::Result<()> {
         },
         _ => MapOptions::default(),
     };
-    let sc = Scenario::combined_arms(units, seed, 20_000).on_map(opts);
+    let sc = if map_name == "siege" {
+        Scenario::siege(units * 3 / 4, units / 4, seed, 20_000, true)
+    } else if map_name == "siege_nomoat" {
+        Scenario::siege(units * 3 / 4, units / 4, seed, 20_000, false)
+    } else {
+        Scenario::combined_arms(units, seed, 20_000).on_map(opts)
+    };
     let mut w = sc.build();
 
     // 개전 시점 배치를 다 담도록 시야를 잡고, 전투 내내 고정한다

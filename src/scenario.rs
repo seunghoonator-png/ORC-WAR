@@ -2,6 +2,7 @@
 //!
 //! 유저가 UI로 만드는 값이자, 헤드리스 회귀 테스트가 코드로 만드는 값이다.
 
+use crate::map::castle::Castle;
 use crate::map::gen::MapOptions;
 use crate::sim::pool::UnitPool;
 use crate::sim::unit_types::stats;
@@ -32,6 +33,8 @@ pub struct Scenario {
     pub formations: Vec<Formation>,
     pub max_ticks: u64,
     pub map: MapOptions,
+    /// 공성전이면 성곽 크기(반폭)와 해자 여부
+    pub castle: Option<([f32; 2], bool)>,
 }
 
 impl Scenario {
@@ -75,6 +78,119 @@ impl Scenario {
             ],
             max_ticks,
             map: MapOptions::default(),
+            castle: None,
+        }
+    }
+
+    /// 공성전 — 성에 틀어박힌 수비군과 그것을 뜯어내려는 공격군.
+    ///
+    /// 공격측은 남쪽에서 올라오며 성문을 마주한다. 성벽을 부술 병기가 없으면
+    /// 아무리 많아도 기어오르다 갈릴 뿐이다.
+    pub fn siege(attackers: u32, defenders: u32, seed: u64, max_ticks: u64, moat: bool) -> Self {
+        use crate::sim::unit_types::{ARCHER, CATAPULT, INF_SPEAR, INF_SWORD, LADDER, RAM};
+        let mid = WORLD_SIZE * 0.5;
+        // 성은 안에 들어설 병력에 맞춰 커진다. 크기를 고정해 두면 수비가 늘어날수록
+        // 성 안에서 서로 겹쳐 서고, 밀어내기 계산이 폭발한다.
+        let area = (defenders as f32 * 4.0).max(60_000.0);
+        let hx = (area * 1.35 / 4.0).sqrt().max(140.0);
+        let hy = (hx / 1.35).max(100.0);
+        let half = [hx, hy];
+        let mut formations = Vec::new();
+
+        // --- 공격측: 성 남쪽에서 올라온다 ---
+        let siege_train = 26u32; // 파성추 6, 투석기 8, 사다리 12
+        let foot = attackers.saturating_sub(siege_train);
+        let mix: [(u8, f32); 3] = [(INF_SWORD, 0.62), (ARCHER, 0.24), (INF_SPEAR, 0.14)];
+        let line_w = (foot as f32).sqrt() * 4.0;
+        let mut depth_off = 0.0f32;
+        for (type_id, share) in mix {
+            let count = (foot as f32 * share) as u32;
+            if count == 0 {
+                continue;
+            }
+            let st = stats(type_id);
+            let spacing = st.radius * 2.3;
+            let cols = ((line_w / spacing).floor() as u32).max(1);
+            let depth = (count.div_ceil(cols)) as f32 * spacing;
+            formations.push(Formation {
+                type_id,
+                team: 0,
+                count,
+                center: [mid, mid - half[1] - 150.0 - depth_off - depth * 0.5],
+                width: line_w,
+                front: [0.0, 1.0],
+            });
+            depth_off += depth;
+        }
+        // 공성 열차는 보병 뒤에 선다
+        for (type_id, count, back) in [
+            (RAM, 6u32, 40.0f32),
+            (LADDER, 12, 70.0),
+            (CATAPULT, 8, 210.0),
+        ] {
+            formations.push(Formation {
+                type_id,
+                team: 0,
+                count,
+                center: [mid, mid - half[1] - 150.0 - back],
+                width: 160.0,
+                front: [0.0, 1.0],
+            });
+        }
+
+        // --- 방어측: 성벽에 붙어 지키고, 안뜰에 예비를 둔다 ---
+        // 성벽 수비는 궁수 위주다. 위에서 쏘는 화살이 가장 값싸게 사람을 줄인다
+        let wall_share = 0.62;
+        let wall_n = (defenders as f32 * wall_share) as u32;
+        let yard_n = defenders - wall_n;
+        let sides: [([f32; 2], [f32; 2], f32); 4] = [
+            ([mid, mid - half[1] + 18.0], [0.0, -1.0], half[0] * 1.7),
+            ([mid, mid + half[1] - 18.0], [0.0, 1.0], half[0] * 1.7),
+            ([mid - half[0] + 18.0, mid], [-1.0, 0.0], half[1] * 1.7),
+            ([mid + half[0] - 18.0, mid], [1.0, 0.0], half[1] * 1.7),
+        ];
+        // 성문이 있는 남쪽에 절반, 나머지 세 면에 나눠 세운다
+        let weights = [0.4f32, 0.2, 0.2, 0.2];
+        for (k, (center, front, width)) in sides.iter().enumerate() {
+            let n = (wall_n as f32 * weights[k]) as u32;
+            if n == 0 {
+                continue;
+            }
+            let archers = n * 3 / 4;
+            formations.push(Formation {
+                type_id: ARCHER,
+                team: 1,
+                count: archers,
+                center: *center,
+                width: *width,
+                front: *front,
+            });
+            formations.push(Formation {
+                type_id: INF_SWORD,
+                team: 1,
+                count: n - archers,
+                center: [center[0] - front[0] * 14.0, center[1] - front[1] * 14.0],
+                width: *width,
+                front: *front,
+            });
+        }
+        // 안뜰 예비대 — 돌파구를 막으러 달려간다
+        formations.push(Formation {
+            type_id: INF_SPEAR,
+            team: 1,
+            count: yard_n,
+            center: [mid, mid],
+            width: half[0] * 1.2,
+            front: [0.0, -1.0],
+        });
+
+        Self {
+            name: format!("siege_{attackers}v{defenders}"),
+            seed,
+            formations,
+            max_ticks,
+            map: MapOptions::default(),
+            castle: Some((half, moat)),
         }
     }
 
@@ -146,6 +262,7 @@ impl Scenario {
             formations,
             max_ticks,
             map: MapOptions::default(),
+            castle: None,
         }
     }
 
@@ -174,6 +291,7 @@ impl Scenario {
             formations: vec![make(a, 0, [0.0, 1.0]), make(b, 1, [0.0, -1.0])],
             max_ticks,
             map: MapOptions::default(),
+            castle: None,
         }
     }
 
@@ -192,6 +310,13 @@ impl Scenario {
     pub fn build(&self) -> World {
         let mut w = World::new(self.seed, self.total_units() as usize);
         w.set_terrain(self.map, self.seed);
+        if let Some((half, moat)) = self.castle {
+            w.place_castle(Castle::square(
+                [WORLD_SIZE * 0.5, WORLD_SIZE * 0.5],
+                half,
+                moat,
+            ));
+        }
         for (fi, f) in self.formations.iter().enumerate() {
             spawn_block(&mut w.pool, f, self.seed, fi as u64);
         }

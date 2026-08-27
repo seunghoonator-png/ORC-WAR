@@ -149,6 +149,8 @@ fn fire(w: &mut World) {
     let stagger = &w.pool.stagger;
     let cooldown = w.pool.cooldown.clone();
     let terrain = &w.terrain;
+    let flows = &w.flows;
+    let field = &w.morale_field;
     let ammo = w.pool.ammo.clone();
 
     // 각 사수가 어디를 겨눌지 고른다
@@ -190,27 +192,38 @@ fn fire(w: &mut World) {
 
                 // 높은 데 선 사수는 더 멀리 쏜다
                 let elev = terrain.height_at(p);
-                // 사거리 안에서 표적을 하나 고른다. 굳이 가장 가까운 적을
-                // 찾지 않는다 — 화살은 사람을 조준하기보다 대열을 향해 쏜다.
+                // 사거리 안에서 겨눌 곳을 고른다.
+                //
+                // 개별 적을 찾겠다고 사거리 전체를 훑으면 안 된다. 120m 반경이면
+                // 밀집 전장에서 격자 칸 만여 개를 뒤지게 되고, 사격 한 단계가
+                // 나머지 전부를 합친 것보다 무거워진다(실측 18.3ms).
+                //
+                // 화살은 애초에 사람을 조준하는 무기가 아니다. 적이 몰려 있는
+                // 쪽을 향해 쏘면 그만이므로, 진격 방향으로 몇 군데를 찔러 보고
+                // 사람이 있는 칸을 고른다.
                 let r = s.range * (1.0 + (elev * 0.004).clamp(0.0, 0.35));
+                let foe = 1 - my_team as usize;
+                let heading = flows
+                    .get(my_team as usize)
+                    .and_then(|ff: &crate::sim::flow::FlowField| ff.dir_at(p))
+                    .unwrap_or([0.0, if my_team == 0 { 1.0 } else { -1.0 }]);
+
                 let mut pick: Option<[f32; 2]> = None;
-                let mut seen = 0u32;
-                let want = 1 + crate::rng::below(seed ^ 0xA110, tick, i as u64, 8);
-                grid.for_each_near(p, r, |j| {
-                    let ju = j as usize;
-                    if team[ju] == my_team {
-                        return;
+                for attempt in 0..5u64 {
+                    let a = crate::rng::signed_f32(seed ^ 0xA110, tick + attempt, i as u64) * 0.45;
+                    let f = crate::rng::unit_f32(seed ^ 0xA111, tick + attempt, i as u64);
+                    let dist = MELEE_THRESHOLD + (r - MELEE_THRESHOLD) * (0.25 + f * 0.75);
+                    let (sa, ca) = a.sin_cos();
+                    let dir = [
+                        heading[0] * ca - heading[1] * sa,
+                        heading[0] * sa + heading[1] * ca,
+                    ];
+                    let probe = [p[0] + dir[0] * dist, p[1] + dir[1] * dist];
+                    if field.presence_at(probe, foe) > 0 {
+                        pick = Some(probe);
+                        break;
                     }
-                    let d = [pos[ju][0] - p[0], pos[ju][1] - p[1]];
-                    let d2 = d[0] * d[0] + d[1] * d[1];
-                    if d2 > r * r || d2 < MELEE_THRESHOLD * MELEE_THRESHOLD {
-                        return;
-                    }
-                    seen += 1;
-                    if seen <= want || pick.is_none() {
-                        pick = Some(pos[ju]);
-                    }
-                });
+                }
                 if let Some(aim) = pick {
                     out.push((i as u32, aim));
                 }
@@ -299,6 +312,21 @@ fn land(w: &mut World) {
         let s = stats(w.pool.type_id[v]);
 
         // 방패는 화살을 상당히 막아준다. 다만 곡사로 떨어지는 것은 절반만.
+        // 흉벽 너머로 넘긴 화살은 위력을 잃는다.
+        //
+        // 이게 없으면 공격군이 성 밖에 선 채로 수비군을 활로만 지워 버린다.
+        // 성벽의 값어치는 사람을 막는 것만이 아니라 시선을 막는 데도 있다.
+        let mut wall_cover = 1.0f32;
+        if let Some(c) = &w.castle {
+            let inside = |p: [f32; 2]| {
+                (p[0] - c.center[0]).abs() < c.half[0] && (p[1] - c.center[1]).abs() < c.half[1]
+            };
+            let from = w.projectiles.origin[i];
+            if inside(at) != inside(from) {
+                wall_cover = 0.3;
+            }
+        }
+
         // 나뭇가지에 걸린다
         let cover = w.terrain.at(at).arrow_block();
         if cover > 0.0 {
@@ -314,7 +342,7 @@ fn land(w: &mut World) {
                 continue;
             }
         }
-        d *= 1.0 - (s.armor - pierce).max(0.0);
+        d *= (1.0 - (s.armor - pierce).max(0.0)) * wall_cover;
         // 아군 오사도 그대로 들어간다
         let _ = shooter_team;
         hits.push((victim, d));

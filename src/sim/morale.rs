@@ -80,6 +80,12 @@ impl MoraleField {
         }
     }
 
+    /// 이 지점 칸에 있는 해당 팀 인원. 사격이 겨눌 곳을 고르는 데 쓴다.
+    #[inline(always)]
+    pub fn presence_at(&self, p: [f32; 2], team: usize) -> u32 {
+        self.presence[team][self.cell_of(p)]
+    }
+
     #[inline(always)]
     pub fn cell_of(&self, p: [f32; 2]) -> usize {
         let cx = ((p[0] / self.cell) as isize).clamp(0, self.w as isize - 1) as usize;

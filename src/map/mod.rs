@@ -4,6 +4,7 @@
 //! 무겁게 하며, 숲은 기병의 돌격을 죽이고 강은 건널 곳을 강요한다.
 //! 이 모든 것이 "어디서 싸울 것인가"를 병력 구성만큼이나 중요하게 만든다.
 
+pub mod castle;
 pub mod gen;
 
 /// 지형 격자 해상도(m)
@@ -23,6 +24,14 @@ pub enum Terrain {
     Ford = 4,
     /// 진창
     Marsh = 5,
+    /// 성벽 — 지상 병력은 통과할 수 없다
+    Wall = 6,
+    /// 닫힌 성문
+    Gate = 7,
+    /// 무너진 성벽의 잔해. 넘어갈 수 있지만 발이 걸린다
+    Rubble = 8,
+    /// 해자 — 물이 차 있다
+    Moat = 9,
 }
 
 impl Terrain {
@@ -35,6 +44,10 @@ impl Terrain {
             Terrain::Marsh => 0.6,
             Terrain::Ford => 0.5,
             Terrain::Rock | Terrain::Water => 0.15,
+            Terrain::Rubble => 0.45,
+            // 흉벽을 기어오르는 속도. 여기 붙어 있는 동안 위에서 돌이 떨어진다
+            Terrain::Wall => 0.05,
+            Terrain::Gate | Terrain::Moat => 0.1,
         }
     }
 
@@ -47,12 +60,27 @@ impl Terrain {
             Terrain::Marsh => 3,
             Terrain::Ford => 4,
             Terrain::Rock | Terrain::Water => 255,
+            Terrain::Rubble => 5,
+            // 성벽은 기어오를 수는 있다 — 다만 다른 길이 없을 때의 이야기다.
+            // 아주 비싸게 매겨 두면 경로탐색이 알아서 문과 돌파구를 먼저 고른다.
+            Terrain::Wall => 70,
+            // 성문과 해자는 부수거나 메우기 전에는 지나갈 수 없다
+            Terrain::Gate | Terrain::Moat => 255,
         }
     }
 
     #[inline(always)]
     pub fn passable(self) -> bool {
-        !matches!(self, Terrain::Rock | Terrain::Water)
+        !matches!(
+            self,
+            Terrain::Rock | Terrain::Water | Terrain::Gate | Terrain::Moat
+        )
+    }
+
+    /// 공성병기가 부수어야 하는 구조물인가
+    #[inline(always)]
+    pub fn is_structure(self) -> bool {
+        matches!(self, Terrain::Wall | Terrain::Gate)
     }
 
     /// 기병이 속도를 붙일 수 있는 땅인가

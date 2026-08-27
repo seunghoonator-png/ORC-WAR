@@ -56,6 +56,7 @@ fn lopsided_fight_ends_in_victory() {
         seed: 11,
         max_ticks: 3_000,
         map: Default::default(),
+        castle: None,
         formations: vec![
             Formation {
                 type_id: INF_SWORD,

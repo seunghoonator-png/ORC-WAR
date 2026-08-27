@@ -10,11 +10,12 @@ pub mod morale;
 pub mod movement;
 pub mod pool;
 pub mod projectile;
+pub mod siege;
 pub mod unit_types;
 
 use rayon::prelude::*;
 
-use crate::map::{gen::MapOptions, TerrainMap};
+use crate::map::{castle::Castle, gen::MapOptions, TerrainMap};
 use flow::{CostField, FlowField};
 use grid::Grid;
 use morale::MoraleField;
@@ -32,6 +33,8 @@ pub const FLOW_CELL: f32 = 12.0;
 pub const CHUNK: usize = 4096;
 /// 목표 재평가 주기(틱)
 const AI_PERIOD: u64 = 10;
+/// 성벽이 무너진 뒤 길을 다시 굽기까지 기다리는 최소 틱
+const PATH_REBUILD_COOLDOWN: u64 = 60;
 /// 적 전열이 깔린 칸의 통행 비용 상한. 크게 잡을수록 기병이 멀리 돌아간다.
 const LINE_COST: u8 = 10;
 
@@ -46,6 +49,12 @@ pub struct BattleStats {
     pub shots_landed: u64,
     /// 기병 충격이 실제로 꽂힌 횟수
     pub charge_impacts: u64,
+    /// 성벽을 기어올라 넘어간 인원
+    pub wall_breaches_climbed: u64,
+    /// 성 한복판을 밟고 있는 공격측 인원
+    pub objective_holders: u32,
+    /// 성벽 위에서 쏟아부은 돌과 기름이 맞은 횟수
+    pub drops_landed: u64,
     /// 틱별 생존 수 — 결과 리포트 그래프용
     pub history: Vec<[u32; 2]>,
 }
@@ -58,12 +67,19 @@ pub struct PhaseTimes {
     pub grid: f64,
     pub combat: f64,
     pub shooting: f64,
+    pub siege: f64,
     pub morale: f64,
 }
 
 impl PhaseTimes {
     pub fn total(&self) -> f64 {
-        self.flow + self.movement + self.grid + self.combat + self.shooting + self.morale
+        self.flow
+            + self.movement
+            + self.grid
+            + self.combat
+            + self.shooting
+            + self.siege
+            + self.morale
     }
 }
 
@@ -81,6 +97,12 @@ pub struct World {
     pub grid: Grid,
     pub cost: CostField,
     pub terrain: TerrainMap,
+    /// 공성전이면 성곽이 있다
+    pub castle: Option<Castle>,
+    /// 공격측이 성 한복판을 붙들고 있은 틱
+    pub objective_hold: u32,
+    /// 사다리가 걸려 있는 자리 (드물게 갱신)
+    pub ladder_spots: Vec<[f32; 2]>,
     /// 플로우 필드.
     ///
     /// 0,1 = 팀별 전면(모든 적)  ·  2,3 = 팀별 무른 표적(적 사수와 무너진 부대)
@@ -99,6 +121,8 @@ pub struct World {
     pub death_events: Vec<([f32; 2], u8, u8)>,
     /// 이번 틱에 무너진 유닛의 위치 — 사기 격자에 충격으로 들어간다
     pub rout_events: Vec<([f32; 2], u8)>,
+    /// 이번 틱에 무너진 성벽 구간의 위치
+    pub breach_events: Vec<[f32; 2]>,
     /// 개전 병력 — 손실률 계산의 분모
     pub start_strength: [u32; 2],
     /// 직전 틱의 페이즈별 소요 시간
@@ -113,6 +137,10 @@ pub struct World {
     flow_mark: Vec<bool>,
     /// 기병용 경로 비용 — 지형에 적 전열의 두께를 얹은 것
     flow_cost_scratch: CostField,
+    /// 성벽이 무너져 길이 바뀌었다
+    flows_dirty: bool,
+    /// 마지막으로 길을 다시 구운 틱 — 연속 붕괴에 매번 반응하지 않기 위해
+    last_path_rebuild: u64,
 }
 
 impl World {
@@ -130,6 +158,9 @@ impl World {
             grid: Grid::new(WORLD_SIZE, GRID_CELL),
             cost,
             terrain: TerrainMap::flat(WORLD_SIZE),
+            castle: None,
+            objective_hold: 0,
+            ladder_spots: Vec::new(),
             flows,
             tick: 0,
             seed,
@@ -138,6 +169,7 @@ impl World {
             projectiles: ProjectilePool::new(),
             death_events: Vec::new(),
             rout_events: Vec::new(),
+            breach_events: Vec::new(),
             start_strength: [0, 0],
             phase: PhaseTimes::default(),
             alive: Vec::with_capacity(capacity),
@@ -147,6 +179,8 @@ impl World {
             flow_sources: Vec::new(),
             flow_mark: vec![false; ncells],
             flow_cost_scratch: CostField::flat(WORLD_SIZE, FLOW_CELL),
+            flows_dirty: false,
+            last_path_rebuild: 0,
         }
     }
 
@@ -154,6 +188,23 @@ impl World {
     pub fn set_terrain(&mut self, opts: MapOptions, seed: u64) {
         self.terrain = crate::map::gen::generate(WORLD_SIZE, opts, seed);
         self.rebuild_cost();
+    }
+
+    /// 성곽을 세우고 지형에 찍는다.
+    pub fn place_castle(&mut self, castle: Castle) {
+        castle.stamp(&mut self.terrain);
+        self.castle = Some(castle);
+        self.rebuild_cost();
+    }
+
+    /// 성벽이 무너진 뒤 경로 비용을 다시 굽는다.
+    pub fn rebuild_cost_public(&mut self) {
+        self.rebuild_cost();
+    }
+
+    /// 다음 틱에 모든 플로우 필드를 다시 굽게 한다.
+    pub fn mark_flows_dirty(&mut self) {
+        self.flows_dirty = true;
     }
 
     /// 지형에서 경로탐색 비용을 만든다.
@@ -196,11 +247,22 @@ impl World {
     pub fn step(&mut self) {
         use std::time::Instant;
         self.death_events.clear();
+        self.breach_events.clear();
 
         // 1. 목표 재평가 — 한 틱에 한 장씩 돌아가며 갱신한다.
         //    전선은 천천히 움직이므로 매 틱 전부 다시 굽는 건 낭비다.
         let t0 = Instant::now();
-        if self.tick.is_multiple_of(AI_PERIOD) {
+        if self.flows_dirty && self.tick >= self.last_path_rebuild + PATH_REBUILD_COOLDOWN {
+            // 성벽이 무너지면 길이 통째로 달라지므로 네 장을 한꺼번에 다시 굽는다.
+            // 다만 투석기가 구간을 연달아 무너뜨리는 동안 매 틱 이 짓을 하면
+            // 경로탐색만으로 예산을 다 쓴다. 잠깐 묵혔다가 한 번에 처리한다.
+            self.flows_dirty = false;
+            self.last_path_rebuild = self.tick;
+            self.rebuild_cost();
+            for i in 0..self.flows.len() {
+                self.rebuild_flow(i);
+            }
+        } else if self.tick.is_multiple_of(AI_PERIOD) {
             let n = self.flows.len() as u64;
             let which = ((self.tick / AI_PERIOD) % n) as usize;
             self.rebuild_flow(which);
@@ -225,6 +287,9 @@ impl World {
 
         // 5b. 원거리
         projectile::step(self);
+        let t4a = Instant::now();
+        // 5c. 공성 — 성벽을 부수고, 넘고, 위에서 들이붓는다
+        siege::step(self);
         let t4b = Instant::now();
 
         // 6. 사기 — 실제로 전투의 승패를 가르는 단계
@@ -236,7 +301,8 @@ impl World {
             movement: (t2 - t1).as_secs_f64() * 1e3,
             grid: (t3 - t2).as_secs_f64() * 1e3,
             combat: (t4 - t3).as_secs_f64() * 1e3,
-            shooting: (t4b - t4).as_secs_f64() * 1e3,
+            shooting: (t4a - t4).as_secs_f64() * 1e3,
+            siege: (t4b - t4a).as_secs_f64() * 1e3,
             morale: (t5 - t4b).as_secs_f64() * 1e3,
         };
 
@@ -358,6 +424,10 @@ impl World {
     }
 
     pub fn outcome(&self, max_ticks: u64) -> Outcome {
+        // 성을 밟고 버텼으면 그것으로 끝이다
+        if self.castle.is_some() && self.objective_hold >= siege::HOLD_TO_WIN {
+            return Outcome::Victory(0);
+        }
         let fighting = [
             self.stats.alive[0] - self.stats.routed[0],
             self.stats.alive[1] - self.stats.routed[1],
