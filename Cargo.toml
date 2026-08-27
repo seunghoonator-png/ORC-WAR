@@ -1,0 +1,21 @@
+[package]
+name = "orc-war"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rayon = "1.10"
+
+[features]
+default = []
+# 렌더링은 GUI가 필요하므로 기능 게이트 뒤에 둔다.
+# 헤드리스 CI/서버에서는 --no-default-features 로 시뮬만 빌드·테스트한다.
+render = []
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[profile.bench]
+inherits = "release"
