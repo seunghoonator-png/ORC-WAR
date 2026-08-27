@@ -8,8 +8,7 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 
 use orc_war::scenario::Scenario;
-use orc_war::sim::pool::UnitState;
-use orc_war::sim::unit_types::INF_SWORD;
+use orc_war::sim::unit_types::stats;
 use orc_war::sim::World;
 
 const W: usize = 1000;
@@ -18,6 +17,10 @@ const H: usize = 460;
 struct Canvas {
     /// 팀별 화소당 유닛 수
     density: Vec<[u16; 2]>,
+    /// 기병이 있는 화소 — 돌격이 눈에 보이도록 밝게 찍는다
+    horse: Vec<[u16; 2]>,
+    /// 날고 있는 발사체
+    shots: Vec<u8>,
     /// 시체 누적 — 전투가 지나간 자리는 지워지지 않는다
     corpses: Vec<u16>,
     view: [f32; 4],
@@ -27,6 +30,8 @@ impl Canvas {
     fn new(view: [f32; 4]) -> Self {
         Self {
             density: vec![[0; 2]; W * H],
+            horse: vec![[0; 2]; W * H],
+            shots: vec![0; W * H],
             corpses: vec![0; W * H],
             view,
         }
@@ -53,15 +58,32 @@ impl Canvas {
 
     fn snap_units(&mut self, w: &World) {
         self.density.iter_mut().for_each(|d| *d = [0; 2]);
+        self.horse.iter_mut().for_each(|d| *d = [0; 2]);
+        self.shots.iter_mut().for_each(|s| *s = 0);
         for i in 0..w.pool.len() {
-            if w.pool.state[i] == UnitState::Dead {
+            if !w.pool.is_alive(i) {
                 continue;
             }
             if let Some(px) = self.to_px(w.pool.pos[i]) {
                 let t = w.pool.team[i] as usize;
                 self.density[px][t] = self.density[px][t].saturating_add(1);
+                if stats(w.pool.type_id[i]).is_cavalry {
+                    self.horse[px][t] = self.horse[px][t].saturating_add(1);
+                }
             }
         }
+        let tick = w.tick;
+        let shots = &mut self.shots;
+        let view = self.view;
+        w.projectiles.for_each_in_flight(tick, |p, _, _| {
+            let [x0, y0, x1, y1] = view;
+            let u = (p[0] - x0) / (x1 - x0);
+            let v = 1.0 - (p[1] - y0) / (y1 - y0);
+            if (0.0..1.0).contains(&u) && (0.0..1.0).contains(&v) {
+                let px = (v * H as f32) as usize * W + (u * W as f32) as usize;
+                shots[px] = shots[px].saturating_add(1);
+            }
+        });
     }
 
     fn write_ppm(&self, path: &str) -> std::io::Result<()> {
@@ -84,21 +106,33 @@ impl Canvas {
                 ];
             }
             let ramp = |n: u16| -> f32 { (n as f32 / 2.5).min(1.0) };
+            let cav = self.horse[i];
             if a > 0 || b > 0 {
                 let (ia, ib) = (ramp(a), ramp(b));
                 if a >= b {
+                    let boost = if cav[0] > 0 { 60.0 } else { 0.0 };
                     rgb = [
                         (90.0 + 165.0 * ia) as u8,
-                        (30.0 + 30.0 * ia) as u8,
-                        (28.0 + 24.0 * ia) as u8,
+                        (30.0 + 30.0 * ia + boost) as u8,
+                        (28.0 + 24.0 * ia + boost * 0.6) as u8,
                     ];
                 } else {
+                    let boost = if cav[1] > 0 { 70.0 } else { 0.0 };
                     rgb = [
-                        (28.0 + 30.0 * ib) as u8,
-                        (60.0 + 70.0 * ib) as u8,
+                        (28.0 + 30.0 * ib + boost) as u8,
+                        (60.0 + 70.0 * ib + boost) as u8,
                         (110.0 + 145.0 * ib) as u8,
                     ];
                 }
+            }
+            if self.shots[i] > 0 {
+                // 날고 있는 화살
+                let k = (self.shots[i].min(3) as f32 / 3.0 * 130.0) as u8;
+                rgb = [
+                    rgb[0].saturating_add(k + 60),
+                    rgb[1].saturating_add(k + 55),
+                    rgb[2].saturating_add(k + 40),
+                ];
             }
             buf.extend_from_slice(&rgb);
         }
@@ -113,7 +147,7 @@ fn main() -> std::io::Result<()> {
     let seed: u64 = a.next().and_then(|s| s.parse().ok()).unwrap_or(1);
     let out_dir = a.next().unwrap_or_else(|| ".".into());
 
-    let sc = Scenario::head_on(units, INF_SWORD, seed, 20_000);
+    let sc = Scenario::combined_arms(units, seed, 20_000);
     let mut w = sc.build();
 
     // 개전 시점 배치를 다 담도록 시야를 잡고, 전투 내내 고정한다
@@ -138,7 +172,7 @@ fn main() -> std::io::Result<()> {
     let _ = (&mut cx, &mut cy);
     let mut canvas = Canvas::new([cx - half_w, cy - half_h, cx + half_w, cy + half_h]);
 
-    let shots = [0u64, 400, 800, 1200, 1800, 2600];
+    let shots = [0u64, 500, 800, 1000, 1400, 2200];
     let mut next = 0usize;
     for t in 0..=*shots.last().unwrap() {
         if next < shots.len() && t == shots[next] {

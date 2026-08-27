@@ -1,7 +1,7 @@
 //! 대칭성 진단 — 동일 조건 양군에서 어느 쪽이, 언제부터, 왜 밀리는지 계측한다.
 
 use orc_war::scenario::Scenario;
-use orc_war::sim::pool::{UnitState, NO_TARGET};
+use orc_war::sim::pool::NO_TARGET;
 use orc_war::sim::unit_types::INF_SWORD;
 
 fn main() {
@@ -42,7 +42,7 @@ fn main() {
         let mut front1 = f32::MAX;
 
         for i in 0..w.pool.len() {
-            if w.pool.state[i] == UnitState::Dead {
+            if !w.pool.is_alive(i) {
                 continue;
             }
             let team = w.pool.team[i] as usize;

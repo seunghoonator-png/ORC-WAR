@@ -28,6 +28,8 @@ const SHIELD_ARC: f32 = std::f32::consts::FRAC_PI_3;
 struct Hit {
     target: u32,
     dmg: f32,
+    /// 방어자가 등이나 옆구리를 내준 타격
+    flanked: bool,
 }
 
 pub fn step(w: &mut World) {
@@ -44,6 +46,7 @@ pub fn step(w: &mut World) {
     let type_id = &w.pool.type_id;
     let team = &w.pool.team;
     let hp = &w.pool.hp;
+    let stagger = &w.pool.stagger;
 
     // --- A/B. 대상 갱신 + 공격 판정 (병렬) ---
     let hits: Vec<Vec<Hit>> = w
@@ -59,7 +62,10 @@ pub fn step(w: &mut World) {
 
             for k in 0..tchunk.len() {
                 let i = base + k;
-                if schunk[k] == UnitState::Dead || schunk[k] == UnitState::Rout {
+                if matches!(
+                    schunk[k],
+                    UnitState::Dead | UnitState::Fled | UnitState::Rout
+                ) {
                     tchunk[k] = NO_TARGET;
                     continue;
                 }
@@ -128,14 +134,20 @@ pub fn step(w: &mut World) {
                     continue;
                 }
                 schunk[k] = UnitState::Fight;
-                if cchunk[k] > 0 {
+                if cchunk[k] > 0 || stagger[i] > 0 {
                     continue;
                 }
                 cchunk[k] = s.attack_period;
 
+                let (mut dmg, flanked) = resolve_damage(i, t, seed, tick, type_id, facing, pos);
+                if stagger[t] > 0 {
+                    // 넘어진 상대는 막지도 피하지도 못한다
+                    dmg *= 2.0;
+                }
                 out.push(Hit {
                     target: tgt,
-                    dmg: resolve_damage(i, t, seed, tick, type_id, facing, pos),
+                    dmg,
+                    flanked,
                 });
             }
             out
@@ -151,7 +163,12 @@ pub fn step(w: &mut World) {
     let mut deaths: [u32; 2] = [0, 0];
     for chunk in &hits {
         for h in chunk {
-            w.pool.hp[h.target as usize] -= h.dmg;
+            let t = h.target as usize;
+            w.pool.hp[t] -= h.dmg;
+            if h.flanked {
+                // 옆이나 뒤를 잡히면 사기가 먼저 부러진다
+                w.pool.morale[t] = (w.pool.morale[t] - crate::sim::morale::FLANK_SHOCK).max(0);
+            }
         }
     }
     for chunk in &hits {
@@ -171,6 +188,8 @@ pub fn step(w: &mut World) {
 }
 
 /// 냉병기 피해 공식: 갑옷은 비율 감쇄, 방패는 정면 한정 확률 차단.
+///
+/// 반환값의 두 번째는 방어자가 옆이나 뒤를 내줬는지 여부다.
 #[inline]
 fn resolve_damage(
     attacker: usize,
@@ -180,30 +199,43 @@ fn resolve_damage(
     type_id: &[u8],
     facing: &[f32],
     pos: &[[f32; 2]],
-) -> f32 {
+) -> (f32, bool) {
     let a = stats(type_id[attacker]);
     let d = stats(type_id[defender]);
 
-    // 방패 판정 — 방어자가 공격자를 정면으로 보고 있을 때만
-    if d.shield > 0.0 {
-        let to_att = [
-            pos[attacker][0] - pos[defender][0],
-            pos[attacker][1] - pos[defender][1],
-        ];
-        let ang = to_att[1].atan2(to_att[0]);
-        let mut diff = (ang - facing[defender]).abs();
-        while diff > std::f32::consts::PI {
-            diff = (std::f32::consts::TAU - diff).abs();
-        }
-        if diff < SHIELD_ARC {
-            let roll = crate::rng::unit_f32(seed ^ 0xB10C, tick, attacker as u64);
-            if roll < d.shield {
-                return 0.0;
-            }
+    // 공격자가 방어자의 어느 쪽에 서 있는가
+    let to_att = [
+        pos[attacker][0] - pos[defender][0],
+        pos[attacker][1] - pos[defender][1],
+    ];
+    let ang = to_att[1].atan2(to_att[0]);
+    let mut off_axis = (ang - facing[defender]).abs();
+    while off_axis > std::f32::consts::PI {
+        off_axis = (std::f32::consts::TAU - off_axis).abs();
+    }
+    let frontal = off_axis < SHIELD_ARC;
+    // 등 뒤 90도는 무방비다
+    let from_behind = off_axis > std::f32::consts::PI * 0.75;
+
+    // 방패는 정면으로 마주 본 공격만 막는다.
+    // 말 위에서 내려찍는 타격은 방패 위쪽을 넘어오므로 절반만 막힌다.
+    if frontal && d.shield > 0.0 {
+        let block = if a.is_cavalry {
+            d.shield * 0.5
+        } else {
+            d.shield
+        };
+        let roll = crate::rng::unit_f32(seed ^ 0xB10C, tick, attacker as u64);
+        if roll < block {
+            return (0.0, false);
         }
     }
 
     // 명중 편차 ±15% — 같은 대형이 완전히 동시에 죽는 걸 막는다
     let jitter = 1.0 + crate::rng::signed_f32(seed ^ 0xDA11, tick, attacker as u64) * 0.15;
-    a.melee_dmg * jitter * (1.0 - d.armor)
+    let mut dmg = a.melee_dmg * jitter * (1.0 - d.armor);
+    if from_behind {
+        dmg *= 1.6;
+    }
+    (dmg, !frontal)
 }

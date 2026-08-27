@@ -144,17 +144,21 @@ fn main() {
         acc.movement += p.movement;
         acc.grid += p.grid;
         acc.combat += p.combat;
+        acc.shooting += p.shooting;
+        acc.morale += p.morale;
         worst = worst.max(p.total());
 
         if !args.quiet && w.tick.is_multiple_of(100) {
             println!(
-                "  t={:>5} ({:>4.0}s)  생존 {:>7} / {:>7}   전사 {:>7} / {:>7}   {:>5.1} ms/tick",
+                "  t={:>5} ({:>4.0}s)  생존 {:>7} / {:>7}   전사 {:>7} / {:>7}   패주 {:>6} / {:>6}   {:>5.1} ms/tick",
                 w.tick,
                 w.tick as f64 / SIM_HZ as f64,
                 w.stats.alive[0],
                 w.stats.alive[1],
                 w.stats.dead[0],
                 w.stats.dead[1],
+                w.stats.routed[0],
+                w.stats.routed[1],
                 p.total()
             );
         }
@@ -186,6 +190,14 @@ fn main() {
         "전사  공격측 {:>7}   방어측 {:>7}",
         w.stats.dead[0], w.stats.dead[1]
     );
+    println!(
+        "패주  공격측 {:>7}   방어측 {:>7}",
+        w.stats.routed[0], w.stats.routed[1]
+    );
+    println!(
+        "이탈  공격측 {:>7}   방어측 {:>7}",
+        w.stats.fled[0], w.stats.fled[1]
+    );
 
     if args.bench {
         println!("\n=== 성능 ({} 스레드, {} 유닛) ===", threads, w.pool.len());
@@ -193,6 +205,8 @@ fn main() {
         println!("  movement  {:>7.2} ms/tick", acc.movement / ticks);
         println!("  grid      {:>7.2} ms/tick", acc.grid / ticks);
         println!("  combat    {:>7.2} ms/tick", acc.combat / ticks);
+        println!("  shooting  {:>7.2} ms/tick", acc.shooting / ticks);
+        println!("  morale    {:>7.2} ms/tick", acc.morale / ticks);
         println!(
             "  ------------------------\n  평균      {:>7.2} ms/tick   (예산 50.00)",
             acc.total() / ticks

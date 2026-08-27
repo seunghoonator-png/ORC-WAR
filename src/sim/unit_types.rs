@@ -38,6 +38,11 @@ pub struct UnitStats {
     pub mass: f32,
     /// 점유 반경(m) — 분리력 계산에 쓴다
     pub radius: f32,
+    /// 지니고 나온 발사체 수. 다 쓰면 그 뒤로는 근접전뿐이다.
+    ///
+    /// 화살을 무한으로 두면 궁수가 접근 시간 내내 쏘아대 전장을 혼자 정리한다.
+    /// 실제로 사수의 사격 시간을 정하는 것은 사거리가 아니라 화살통이다.
+    pub ammo: u16,
     pub morale_base: u8,
     pub is_cavalry: bool,
     /// 장창 브레이스 가능 여부
@@ -67,6 +72,7 @@ pub static UNIT_STATS: [UnitStats; N_TYPES] = [
         shield: 0.60,
         mass: 1.0,
         radius: 0.45,
+        ammo: 0,
         morale_base: 100,
         is_cavalry: false,
         can_brace: false,
@@ -83,6 +89,7 @@ pub static UNIT_STATS: [UnitStats; N_TYPES] = [
         shield: 0.0,
         mass: 1.0,
         radius: 0.45,
+        ammo: 0,
         morale_base: 100,
         is_cavalry: false,
         can_brace: true,
@@ -99,6 +106,7 @@ pub static UNIT_STATS: [UnitStats; N_TYPES] = [
         shield: 0.0,
         mass: 1.2,
         radius: 0.50,
+        ammo: 0,
         morale_base: 110,
         is_cavalry: false,
         can_brace: false,
@@ -115,6 +123,7 @@ pub static UNIT_STATS: [UnitStats; N_TYPES] = [
         shield: 0.0,
         mass: 0.8,
         radius: 0.42,
+        ammo: 24,
         morale_base: 80,
         is_cavalry: false,
         can_brace: false,
@@ -131,6 +140,7 @@ pub static UNIT_STATS: [UnitStats; N_TYPES] = [
         shield: 0.0,
         mass: 0.8,
         radius: 0.42,
+        ammo: 20,
         morale_base: 85,
         is_cavalry: false,
         can_brace: false,
@@ -147,6 +157,7 @@ pub static UNIT_STATS: [UnitStats; N_TYPES] = [
         shield: 0.0,
         mass: 4.0,
         radius: 0.95,
+        ammo: 0,
         morale_base: 95,
         is_cavalry: true,
         can_brace: false,
@@ -163,6 +174,7 @@ pub static UNIT_STATS: [UnitStats; N_TYPES] = [
         shield: 0.0,
         mass: 5.5,
         radius: 1.10,
+        ammo: 0,
         morale_base: 120,
         is_cavalry: true,
         can_brace: false,
@@ -179,6 +191,7 @@ pub static UNIT_STATS: [UnitStats; N_TYPES] = [
         shield: 0.0,
         mass: 3.5,
         radius: 0.90,
+        ammo: 20,
         morale_base: 90,
         is_cavalry: true,
         can_brace: false,

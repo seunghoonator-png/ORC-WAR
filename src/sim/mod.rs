@@ -2,18 +2,23 @@
 //!
 //! 고정 스텝 20Hz. 렌더와 완전히 분리되어 있어 헤드리스로도 그대로 돌아간다.
 
+pub mod charge;
 pub mod combat;
 pub mod flow;
 pub mod grid;
+pub mod morale;
 pub mod movement;
 pub mod pool;
+pub mod projectile;
 pub mod unit_types;
 
 use rayon::prelude::*;
 
 use flow::{CostField, FlowField};
 use grid::Grid;
+use morale::MoraleField;
 use pool::{UnitPool, UnitState};
+use projectile::ProjectilePool;
 
 pub const SIM_HZ: u32 = 20;
 pub const DT: f32 = 1.0 / SIM_HZ as f32;
@@ -32,6 +37,10 @@ pub struct BattleStats {
     pub alive: [u32; 2],
     pub dead: [u32; 2],
     pub routed: [u32; 2],
+    /// 전장을 아주 벗어난 병력 — 죽지는 않았지만 이 전투에는 없다
+    pub fled: [u32; 2],
+    /// 명중한 발사체 수
+    pub shots_landed: u64,
     /// 틱별 생존 수 — 결과 리포트 그래프용
     pub history: Vec<[u32; 2]>,
 }
@@ -43,11 +52,13 @@ pub struct PhaseTimes {
     pub movement: f64,
     pub grid: f64,
     pub combat: f64,
+    pub shooting: f64,
+    pub morale: f64,
 }
 
 impl PhaseTimes {
     pub fn total(&self) -> f64 {
-        self.flow + self.movement + self.grid + self.combat
+        self.flow + self.movement + self.grid + self.combat + self.shooting + self.morale
     }
 }
 
@@ -70,8 +81,15 @@ pub struct World {
     pub seed: u64,
     pub stats: BattleStats,
 
+    pub morale_field: MoraleField,
+    pub projectiles: ProjectilePool,
+
     /// 이번 틱의 사망 지점 — 렌더가 시체 데칼로 굽는다
     pub death_events: Vec<([f32; 2], u8, u8)>,
+    /// 이번 틱에 무너진 유닛의 위치 — 사기 격자에 충격으로 들어간다
+    pub rout_events: Vec<([f32; 2], u8)>,
+    /// 개전 병력 — 손실률 계산의 분모
+    pub start_strength: [u32; 2],
     /// 직전 틱의 페이즈별 소요 시간
     pub phase: PhaseTimes,
 
@@ -97,7 +115,11 @@ impl World {
             tick: 0,
             seed,
             stats: BattleStats::default(),
+            morale_field: MoraleField::new(WORLD_SIZE),
+            projectiles: ProjectilePool::new(),
             death_events: Vec::new(),
+            rout_events: Vec::new(),
+            start_strength: [0, 0],
             phase: PhaseTimes::default(),
             alive: Vec::with_capacity(capacity),
             pos_next: Vec::with_capacity(capacity),
@@ -118,6 +140,7 @@ impl World {
         self.refresh_alive();
         self.grid.rebuild(&self.pool.pos, &self.alive);
         self.recount();
+        self.start_strength = self.stats.alive;
         // 첫 틱부터 유닛이 갈 곳을 알도록 양 팀 필드를 미리 굽는다
         self.rebuild_flow(0);
         self.rebuild_flow(1);
@@ -145,18 +168,31 @@ impl World {
         self.grid.rebuild(&self.pool.pos, &self.alive);
         let t3 = Instant::now();
 
-        // 4. 전투
+        // 4. 돌격 충돌과 창벽
+        charge::step(self);
+
+        // 5. 전투
         combat::step(self);
         let t4 = Instant::now();
+
+        // 5b. 원거리
+        projectile::step(self);
+        let t4b = Instant::now();
+
+        // 6. 사기 — 실제로 전투의 승패를 가르는 단계
+        morale::step(self);
+        let t5 = Instant::now();
 
         self.phase = PhaseTimes {
             flow: (t1 - t0).as_secs_f64() * 1e3,
             movement: (t2 - t1).as_secs_f64() * 1e3,
             grid: (t3 - t2).as_secs_f64() * 1e3,
             combat: (t4 - t3).as_secs_f64() * 1e3,
+            shooting: (t4b - t4).as_secs_f64() * 1e3,
+            morale: (t5 - t4b).as_secs_f64() * 1e3,
         };
 
-        // 5. 정리
+        // 7. 정리
         self.tick += 1;
         if self.tick.is_multiple_of(5) {
             self.recount();
@@ -170,27 +206,42 @@ impl World {
         self.alive
             .par_iter_mut()
             .enumerate()
-            .for_each(|(i, a)| *a = state[i] != UnitState::Dead);
+            .for_each(|(i, a)| *a = !matches!(state[i], UnitState::Dead | UnitState::Fled));
     }
 
     fn recount(&mut self) {
         let state = &self.pool.state;
         let team = &self.pool.team;
-        let (a0, a1, r0, r1) = (0..self.pool.len())
+        // [생존0, 생존1, 패주0, 패주1, 이탈0, 이탈1]
+        let c = (0..self.pool.len())
             .into_par_iter()
-            .map(|i| match (state[i], team[i]) {
-                (UnitState::Dead, _) => (0u32, 0u32, 0u32, 0u32),
-                (UnitState::Rout, 0) => (1, 0, 1, 0),
-                (UnitState::Rout, _) => (0, 1, 0, 1),
-                (_, 0) => (1, 0, 0, 0),
-                (_, _) => (0, 1, 0, 0),
+            .map(|i| {
+                let mut c = [0u32; 6];
+                let t = team[i] as usize;
+                match state[i] {
+                    UnitState::Dead => {}
+                    UnitState::Fled => c[4 + t] = 1,
+                    UnitState::Rout => {
+                        c[t] = 1;
+                        c[2 + t] = 1;
+                    }
+                    _ => c[t] = 1,
+                }
+                c
             })
             .reduce(
-                || (0, 0, 0, 0),
-                |x, y| (x.0 + y.0, x.1 + y.1, x.2 + y.2, x.3 + y.3),
+                || [0u32; 6],
+                |a, b| {
+                    let mut o = [0u32; 6];
+                    for k in 0..6 {
+                        o[k] = a[k] + b[k];
+                    }
+                    o
+                },
             );
-        self.stats.alive = [a0, a1];
-        self.stats.routed = [r0, r1];
+        self.stats.alive = [c[0], c[1]];
+        self.stats.routed = [c[2], c[3]];
+        self.stats.fled = [c[4], c[5]];
     }
 
     /// 상대 팀이 점유한 모든 셀을 목표로 하는 플로우 필드를 굽는다.

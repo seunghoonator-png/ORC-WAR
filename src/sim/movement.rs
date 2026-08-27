@@ -27,6 +27,8 @@ const SEP_STRENGTH: f32 = 4.0;
 const POS_FIX: f32 = 0.5;
 /// 한 틱에 위치 보정으로 움직일 수 있는 최대 거리(m) — 폭주 방지
 const MAX_POS_FIX: f32 = 0.12;
+/// 사수가 이 거리 안으로 적이 들어오면 물러서기 시작한다(m)
+const KITE_RANGE: f32 = 14.0;
 /// 적군과는 이만큼 더 떨어지려 한다.
 ///
 /// 아군과 같은 간격만 두면 두 대형이 서로를 그냥 통과해 버린다(실측: 개전
@@ -64,7 +66,7 @@ pub fn step(w: &mut World) {
                 let p = pos[i];
                 let v = vel[i];
 
-                if state[i] == UnitState::Dead {
+                if matches!(state[i], UnitState::Dead | UnitState::Fled) {
                     pchunk[k] = p;
                     vchunk[k] = [0.0, 0.0];
                     fchunk[k] = pool.facing[i];
@@ -84,12 +86,16 @@ pub fn step(w: &mut World) {
                         [0.0, 1.0]
                     };
                 } else if target[i] != NO_TARGET {
-                    // 교전 대상이 있으면 그쪽으로 파고든다
                     let t = target[i] as usize;
                     let d = [pos[t][0] - p[0], pos[t][1] - p[1]];
-                    let len = (d[0] * d[0] + d[1] * d[1]).sqrt();
+                    let len = (d[0] * d[0] + d[1] * d[1]).sqrt().max(1e-4);
                     let reach = s.reach + stats(type_id[t]).radius;
-                    if len > reach {
+                    if s.range > 0.0 && pool.ammo[i] > 0 && len < KITE_RANGE {
+                        // 아직 쏠 화살이 남은 사수는 붙지 않고 물러서며 쏜다.
+                        // 활을 든 채 창칼 앞으로 걸어들어갈 이유가 없다.
+                        want = [-d[0] / len, -d[1] / len];
+                    } else if len > reach {
+                        // 교전 대상이 있으면 그쪽으로 파고든다
                         want = [d[0] / len, d[1] / len];
                     }
                 } else if let Some(ff) = flows.get(goal[i] as usize) {
@@ -139,10 +145,13 @@ pub fn step(w: &mut World) {
                 });
 
                 // --- 3. 속도 적분 ---
-                let speed = if state[i] == UnitState::Rout {
-                    s.speed * 1.3 // 도망은 빠르다
-                } else {
-                    s.speed
+                let speed = match state[i] {
+                    UnitState::Rout => s.speed * 1.3, // 도망은 빠르다
+                    UnitState::Charge => s.speed * crate::sim::charge::CHARGE_SPEED,
+                    // 창을 세웠거나 나가떨어진 유닛은 제자리를 지킨다
+                    UnitState::Brace => 0.0,
+                    _ if pool.stagger[i] > 0 => 0.0,
+                    _ => s.speed,
                 };
                 let desired = [
                     want[0] * speed + push[0] * SEP_STRENGTH * DT * speed,

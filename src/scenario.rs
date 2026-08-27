@@ -75,6 +75,97 @@ impl Scenario {
         }
     }
 
+    /// 여러 병종을 섞은 전형적인 야전 편성. 앞에 보병, 뒤에 사수, 양익에 기병.
+    pub fn combined_arms(total: u32, seed: u64, max_ticks: u64) -> Self {
+        use crate::sim::unit_types::{ARCHER, CAV_HEAVY, CAV_LIGHT, INF_SPEAR, INF_SWORD};
+        let half = total / 2;
+        let mid = WORLD_SIZE * 0.5;
+        // 전열 / 창병 / 사수 / 중기병 / 경기병
+        let mix: [(u8, f32); 5] = [
+            (INF_SWORD, 0.42),
+            (INF_SPEAR, 0.18),
+            (ARCHER, 0.22),
+            (CAV_HEAVY, 0.10),
+            (CAV_LIGHT, 0.08),
+        ];
+        let line_width = (half as f32).sqrt() * 4.0;
+        let mut formations = Vec::new();
+        for team in 0..2u8 {
+            let sign = if team == 0 { 1.0 } else { -1.0 };
+            let front = [0.0, sign];
+            // 전열에서 뒤로 물러날수록 깊이가 쌓인다
+            let mut depth_off = 0.0f32;
+            for (slot, (type_id, share)) in mix.iter().enumerate() {
+                let count = (half as f32 * share) as u32;
+                if count == 0 {
+                    continue;
+                }
+                let st = stats(*type_id);
+                let spacing = st.radius * 2.3;
+                let is_cav = st.is_cavalry;
+                // 기병은 양익으로 빠진다
+                let (width, lateral) = if is_cav {
+                    let w = line_width * 0.22;
+                    let side = if slot % 2 == 0 { 1.0 } else { -1.0 };
+                    (w, side * (line_width * 0.5 + w * 0.6))
+                } else {
+                    (line_width, 0.0)
+                };
+                let cols = ((width / spacing).floor() as u32).max(1);
+                let depth = (count.div_ceil(cols)) as f32 * spacing;
+                let center_y = if is_cav {
+                    mid - sign * 45.0
+                } else {
+                    mid - sign * (45.0 + depth_off + depth * 0.5)
+                };
+                if !is_cav {
+                    depth_off += depth;
+                }
+                formations.push(Formation {
+                    type_id: *type_id,
+                    team,
+                    count,
+                    center: [mid + lateral, center_y],
+                    width,
+                    front,
+                });
+            }
+        }
+        Self {
+            name: format!("combined_arms_{total}"),
+            seed,
+            formations,
+            max_ticks,
+        }
+    }
+
+    /// 서로 다른 병종을 맞붙인다. 상성 검증용.
+    pub fn matchup(a: (u8, u32), b: (u8, u32), seed: u64, max_ticks: u64, gap: f32) -> Self {
+        let mid = WORLD_SIZE * 0.5;
+        let make = |(type_id, count): (u8, u32), team: u8, front: [f32; 2]| {
+            let s = stats(type_id);
+            let spacing = s.radius * 2.3;
+            let width = (count as f32).sqrt() * spacing * 4.0;
+            let cols = ((width / spacing).floor() as u32).max(1);
+            let depth = (count.div_ceil(cols)) as f32 * spacing;
+            let off = depth * 0.5 + gap * 0.5;
+            Formation {
+                type_id,
+                team,
+                count,
+                center: [mid, mid - front[1] * off],
+                width,
+                front,
+            }
+        };
+        Self {
+            name: format!("{} vs {}", stats(a.0).name, stats(b.0).name),
+            seed,
+            formations: vec![make(a, 0, [0.0, 1.0]), make(b, 1, [0.0, -1.0])],
+            max_ticks,
+        }
+    }
+
     /// 같은 대치를 동서 축으로 세운 것. 좌표축에 얽힌 편향을 가려내는 데 쓴다.
     pub fn head_on_x(total: u32, type_id: u8, seed: u64, max_ticks: u64) -> Self {
         let mut sc = Self::head_on(total, type_id, seed, max_ticks);
