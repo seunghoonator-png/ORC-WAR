@@ -1,16 +1,14 @@
-//! 전장 스냅샷 — 전투를 돌리며 일정 간격으로 화면을 이미지로 굽는다.
+//! 전투 스냅샷을 이미지 여러 장으로 굽는다.
 //!
-//! GUI 없이 시뮬레이션이 제대로 보이는지 확인하는 용도이자, 나중에 결과
-//! 리포트의 전황 축소도로도 쓴다. 화소 하나에 유닛 여럿이 겹치므로 밀도를
-//! 밝기로 환산하는데, 이는 실제 렌더러가 최대 줌아웃에서 쓸 방식과 같다.
+//! `orc-war --snapshot [유닛] [씨앗] [폴더] [지형]`
 
 use std::fs::File;
 use std::io::{BufWriter, Write};
 
-use orc_war::map::Terrain;
-use orc_war::scenario::Scenario;
-use orc_war::sim::unit_types::stats;
-use orc_war::sim::World;
+use crate::map::Terrain;
+use crate::scenario::Scenario;
+use crate::sim::unit_types::stats;
+use crate::sim::World;
 
 const W: usize = 1000;
 const H: usize = 460;
@@ -89,8 +87,9 @@ impl Canvas {
     }
 
     fn accumulate_corpses(&mut self, w: &World) {
-        for (p, _, _) in &w.death_events {
-            if let Some(i) = self.to_px(*p) {
+        for d in &w.death_events {
+            let p = d.pos;
+            if let Some(i) = self.to_px(p) {
                 self.corpses[i] = self.corpses[i].saturating_add(1);
             }
         }
@@ -194,8 +193,8 @@ impl Canvas {
     }
 }
 
-fn main() -> std::io::Result<()> {
-    let mut a = std::env::args().skip(1);
+pub fn run(argv: &[String]) -> std::io::Result<()> {
+    let mut a = argv.iter().cloned();
     let units: u32 = a.next().and_then(|s| s.parse().ok()).unwrap_or(60_000);
     let seed: u64 = a.next().and_then(|s| s.parse().ok()).unwrap_or(1);
     let out_dir = a.next().unwrap_or_else(|| ".".into());
@@ -206,7 +205,7 @@ fn main() -> std::io::Result<()> {
     // 전장 한복판을 이 폭(m)으로 잘라 본다. 0이면 전체를 담는다.
     let zoom_w: f32 = a.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
 
-    use orc_war::map::gen::{MapKind, MapOptions};
+    use crate::map::gen::{MapKind, MapOptions};
     let opts = match map_name.as_str() {
         "hills" => MapOptions {
             kind: MapKind::Hills,

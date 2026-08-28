@@ -9,6 +9,6 @@ echo.
 echo  지형을 바꾸려면 마지막 인자를 고치세요:
 echo    plains / hills / mountain / river / forest
 echo.
-snapshot.exe 60000 5 . river
+orc-war.exe --snapshot 60000 5 . river
 echo.
 pause

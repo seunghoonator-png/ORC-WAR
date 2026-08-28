@@ -21,6 +21,7 @@ use grid::Grid;
 use morale::MoraleField;
 use pool::{UnitPool, UnitState};
 use projectile::ProjectilePool;
+use unit_types::N_TYPES;
 
 pub const SIM_HZ: u32 = 20;
 pub const DT: f32 = 1.0 / SIM_HZ as f32;
@@ -38,7 +39,33 @@ const PATH_REBUILD_COOLDOWN: u64 = 60;
 /// 적 전열이 깔린 칸의 통행 비용 상한. 크게 잡을수록 기병이 멀리 돌아간다.
 const LINE_COST: u8 = 10;
 
-#[derive(Default, Clone)]
+/// 무엇에 죽었는가. 결과 리포트에서 "실제로 사람을 줄인 것"을 보여준다.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Cause {
+    /// 칼과 창이 닿아서
+    Melee = 0,
+    /// 화살·쇠뇌·투석
+    Missile = 1,
+    /// 기병 충격에 깔려서
+    Charge = 2,
+    /// 성벽 위에서 쏟아진 것에
+    Drop = 3,
+}
+
+pub const N_CAUSES: usize = 4;
+
+pub static CAUSE_NAMES: [&str; N_CAUSES] = ["근접", "사격", "돌격", "낙하물"];
+
+/// 한 명의 죽음.
+#[derive(Clone, Copy)]
+pub struct Death {
+    pub pos: [f32; 2],
+    pub team: u8,
+    pub type_id: u8,
+    pub cause: Cause,
+}
+
+#[derive(Clone)]
 pub struct BattleStats {
     pub alive: [u32; 2],
     pub dead: [u32; 2],
@@ -57,6 +84,32 @@ pub struct BattleStats {
     pub drops_landed: u64,
     /// 틱별 생존 수 — 결과 리포트 그래프용
     pub history: Vec<[u32; 2]>,
+    /// 개전 시 병종별 인원 [팀][병종]
+    pub start_by_type: [[u32; N_TYPES]; 2],
+    /// 병종별 전사자 [팀][병종]
+    pub dead_by_type: [[u32; N_TYPES]; 2],
+    /// 사인별 전사자 [팀][사인]
+    pub dead_by_cause: [[u32; N_CAUSES]; 2],
+}
+
+impl Default for BattleStats {
+    fn default() -> Self {
+        Self {
+            alive: [0; 2],
+            dead: [0; 2],
+            routed: [0; 2],
+            fled: [0; 2],
+            shots_landed: 0,
+            charge_impacts: 0,
+            wall_breaches_climbed: 0,
+            objective_holders: 0,
+            drops_landed: 0,
+            history: Vec::new(),
+            start_by_type: [[0; N_TYPES]; 2],
+            dead_by_type: [[0; N_TYPES]; 2],
+            dead_by_cause: [[0; N_CAUSES]; 2],
+        }
+    }
 }
 
 /// 페이즈별 소요 시간(ms) — 성능 예산 검증용
@@ -117,8 +170,8 @@ pub struct World {
     pub morale_field: MoraleField,
     pub projectiles: ProjectilePool,
 
-    /// 이번 틱의 사망 지점 — 렌더가 시체 데칼로 굽는다
-    pub death_events: Vec<([f32; 2], u8, u8)>,
+    /// 이번 틱의 사망 — 렌더가 시체 데칼로 굽고, 통계가 집계한다
+    pub death_events: Vec<Death>,
     /// 이번 틱에 무너진 유닛의 위치 — 사기 격자에 충격으로 들어간다
     pub rout_events: Vec<([f32; 2], u8)>,
     /// 이번 틱에 무너진 성벽 구간의 위치
@@ -137,6 +190,8 @@ pub struct World {
     flow_mark: Vec<bool>,
     /// 기병용 경로 비용 — 지형에 적 전열의 두께를 얹은 것
     flow_cost_scratch: CostField,
+    /// 다시 구워야 할 플로우 필드 대기열 — 한 틱에 한 장씩 뺀다
+    flow_queue: Vec<usize>,
     /// 성벽이 무너져 길이 바뀌었다
     flows_dirty: bool,
     /// 마지막으로 길을 다시 구운 틱 — 연속 붕괴에 매번 반응하지 않기 위해
@@ -167,6 +222,7 @@ impl World {
             stats: BattleStats::default(),
             morale_field: MoraleField::new(WORLD_SIZE),
             projectiles: ProjectilePool::new(),
+            flow_queue: Vec::new(),
             death_events: Vec::new(),
             rout_events: Vec::new(),
             breach_events: Vec::new(),
@@ -244,6 +300,11 @@ impl World {
         );
         self.recount();
         self.start_strength = self.stats.alive;
+        // 병종별 개전 인원 — 결과 리포트의 손실률 분모
+        for i in 0..n {
+            self.stats.start_by_type[self.pool.team[i] as usize][self.pool.type_id[i] as usize] +=
+                1;
+        }
         // 첫 틱부터 유닛이 갈 곳을 알도록 모든 장을 미리 굽는다
         for i in 0..self.flows.len() {
             self.rebuild_flow(i);
@@ -259,15 +320,20 @@ impl World {
         //    전선은 천천히 움직이므로 매 틱 전부 다시 굽는 건 낭비다.
         let t0 = Instant::now();
         if self.flows_dirty && self.tick >= self.last_path_rebuild + PATH_REBUILD_COOLDOWN {
-            // 성벽이 무너지면 길이 통째로 달라지므로 네 장을 한꺼번에 다시 굽는다.
+            // 성벽이 무너지면 길이 통째로 달라지므로 네 장을 전부 다시 구워야 한다.
             // 다만 투석기가 구간을 연달아 무너뜨리는 동안 매 틱 이 짓을 하면
-            // 경로탐색만으로 예산을 다 쓴다. 잠깐 묵혔다가 한 번에 처리한다.
+            // 경로탐색만으로 예산을 다 쓴다. 잠깐 묵혔다가 처리한다.
             self.flows_dirty = false;
             self.last_path_rebuild = self.tick;
             self.rebuild_cost();
-            for i in 0..self.flows.len() {
-                self.rebuild_flow(i);
-            }
+            // 네 장을 한 틱에 몰아 구우면 **그 틱만** 예산을 세 배로 넘긴다.
+            // 화면에서는 프레임 하나가 통째로 멈추는 것으로 보인다.
+            // 한 틱에 한 장씩 굽는다 — 뒤늦게 굽히는 장은 두어 틱(0.1초) 낡은
+            // 길을 들고 있지만, 그 사이 사람이 걷는 거리는 한 걸음이 못 된다.
+            self.flow_queue = (0..self.flows.len()).rev().collect();
+        }
+        if let Some(which) = self.flow_queue.pop() {
+            self.rebuild_flow(which);
         } else if self.tick.is_multiple_of(AI_PERIOD) {
             let n = self.flows.len() as u64;
             let which = ((self.tick / AI_PERIOD) % n) as usize;
@@ -317,7 +383,12 @@ impl World {
             morale: (t5 - t4b).as_secs_f64() * 1e3,
         };
 
-        // 7. 정리
+        // 7. 정리 — 이번 틱의 사망을 병종·사인별로 적는다
+        for d in &self.death_events {
+            let t = d.team as usize;
+            self.stats.dead_by_type[t][d.type_id as usize] += 1;
+            self.stats.dead_by_cause[t][d.cause as usize] += 1;
+        }
         self.tick += 1;
         if self.tick.is_multiple_of(5) {
             self.recount();

@@ -149,7 +149,8 @@ pub fn step(w: &mut World) {
     // --- 1. 격자 갱신 ---
     w.morale_field.decay_and_spread();
 
-    for (pos, team, _) in &w.death_events {
+    for d in &w.death_events {
+        let (pos, team) = (&d.pos, &d.team);
         let c = w.morale_field.cell_of(*pos);
         w.morale_field.shock[*team as usize][c] += SHOCK_PER_DEATH;
     }

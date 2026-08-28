@@ -87,6 +87,20 @@ impl Scenario {
     /// 공격측은 남쪽에서 올라오며 성문을 마주한다. 성벽을 부술 병기가 없으면
     /// 아무리 많아도 기어오르다 갈릴 뿐이다.
     pub fn siege(attackers: u32, defenders: u32, seed: u64, max_ticks: u64, moat: bool) -> Self {
+        use crate::sim::unit_types::{ARCHER, INF_SPEAR, INF_SWORD};
+        let mix = [(INF_SWORD, 0.62), (ARCHER, 0.24), (INF_SPEAR, 0.14)];
+        Self::siege_with_mix(attackers, defenders, seed, max_ticks, moat, &mix)
+    }
+
+    /// 공격측 보병 편성을 직접 주는 공성전.
+    pub fn siege_with_mix(
+        attackers: u32,
+        defenders: u32,
+        seed: u64,
+        max_ticks: u64,
+        moat: bool,
+        foot_mix: &[(u8, f32)],
+    ) -> Self {
         use crate::sim::unit_types::{ARCHER, CATAPULT, INF_SPEAR, INF_SWORD, LADDER, RAM};
         let mid = WORLD_SIZE * 0.5;
         // 성은 안에 들어설 병력에 맞춰 커진다. 크기를 고정해 두면 수비가 늘어날수록
@@ -100,10 +114,9 @@ impl Scenario {
         // --- 공격측: 성 남쪽에서 올라온다 ---
         let siege_train = 26u32; // 파성추 6, 투석기 8, 사다리 12
         let foot = attackers.saturating_sub(siege_train);
-        let mix: [(u8, f32); 3] = [(INF_SWORD, 0.62), (ARCHER, 0.24), (INF_SPEAR, 0.14)];
         let line_w = (foot as f32).sqrt() * 4.0;
         let mut depth_off = 0.0f32;
-        for (type_id, share) in mix {
+        for &(type_id, share) in foot_mix {
             let count = (foot as f32 * share) as u32;
             if count == 0 {
                 continue;
@@ -202,17 +215,18 @@ impl Scenario {
 
     /// 여러 병종을 섞은 전형적인 야전 편성. 앞에 보병, 뒤에 사수, 양익에 기병.
     pub fn combined_arms(total: u32, seed: u64, max_ticks: u64) -> Self {
-        use crate::sim::unit_types::{ARCHER, CAV_HEAVY, CAV_LIGHT, INF_SPEAR, INF_SWORD};
+        use crate::config::Doctrine;
+        Self::field_with_mix(total, Doctrine::Balanced.mix(), seed, max_ticks)
+    }
+
+    /// 병종 비율을 직접 주는 야전 편성.
+    ///
+    /// 양측이 같은 편성을 쓴다. 서로 다른 편성을 붙이면 재미는 있겠지만, 이
+    /// 시뮬레이터가 보려는 것은 "어느 쪽이 유리한 설정인가"가 아니라 "같은 조건에서
+    /// 무엇이 얼마나 강한가"다.
+    pub fn field_with_mix(total: u32, mix: &[(u8, f32)], seed: u64, max_ticks: u64) -> Self {
         let half = total / 2;
         let mid = WORLD_SIZE * 0.5;
-        // 전열 / 창병 / 사수 / 중기병 / 경기병
-        let mix: [(u8, f32); 5] = [
-            (INF_SWORD, 0.42),
-            (INF_SPEAR, 0.18),
-            (ARCHER, 0.22),
-            (CAV_HEAVY, 0.10),
-            (CAV_LIGHT, 0.08),
-        ];
         let line_width = (half as f32).sqrt() * 4.0;
         let mut formations = Vec::new();
         for team in 0..2u8 {
@@ -257,7 +271,7 @@ impl Scenario {
             }
         }
         Self {
-            name: format!("combined_arms_{total}"),
+            name: format!("field_{total}"),
             seed,
             formations,
             max_ticks,

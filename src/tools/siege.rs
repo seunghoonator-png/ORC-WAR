@@ -1,12 +1,14 @@
-//! 공성전 실행 — 성을 두고 벌어지는 전투를 끝까지 돌린다.
+//! 공성전을 콘솔에서 끝까지 돌린다.
+//!
+//! `orc-war --siege <공격> <수비> [씨앗] [nomoat] [최대틱]`
 
 use std::time::Instant;
 
-use orc_war::scenario::Scenario;
-use orc_war::sim::{Outcome, SIM_HZ};
+use crate::scenario::Scenario;
+use crate::sim::{Outcome, SIM_HZ};
 
-fn main() {
-    let mut a = std::env::args().skip(1);
+pub fn run(argv: &[String]) {
+    let mut a = argv.iter().cloned();
     let attackers: u32 = a.next().and_then(|s| s.parse().ok()).unwrap_or(60_000);
     let defenders: u32 = a.next().and_then(|s| s.parse().ok()).unwrap_or(20_000);
     let seed: u64 = a.next().and_then(|s| s.parse().ok()).unwrap_or(1);
@@ -25,7 +27,7 @@ fn main() {
     );
 
     let t0 = Instant::now();
-    let mut acc = orc_war::sim::PhaseTimes::default();
+    let mut acc = crate::sim::PhaseTimes::default();
     let outcome = loop {
         w.step();
         let p = w.phase;

@@ -5,6 +5,8 @@
 //! 그림 자체가 점과 사각형뿐이라 셰이더로 얻을 것이 많지도 않다.
 
 pub mod font;
+pub mod uifont;
+mod uifont_table;
 
 use rayon::prelude::*;
 
@@ -114,7 +116,8 @@ impl Decals {
     /// 한 프레임에 여러 틱을 돌릴 수 있으므로 여기서 목록을 비우면 안 된다.
     /// 그리고 나서 `clear_dirty` 로 비운다.
     pub fn absorb(&mut self, world: &World) {
-        for (p, _, _) in &world.death_events {
+        for d in &world.death_events {
+            let p = d.pos;
             let cx = ((p[0] / self.cell) as isize).clamp(0, self.w as isize - 1) as usize;
             let cy = ((p[1] / self.cell) as isize).clamp(0, self.h as isize - 1) as usize;
             let i = cy * self.w + cx;
@@ -561,61 +564,50 @@ pub fn draw_hud(
     paused: bool,
     fps: f32,
     outcome: Outcome,
+    note: Option<&str>,
 ) {
-    let pad = 12i32;
+    let pad = 14i32;
     let ink = rgb(232, 232, 220);
     let dim = rgb(150, 150, 140);
     let red = rgb(226, 84, 72);
     let blue = rgb(92, 150, 236);
-
-    // 위쪽 전황 줄
-    let mut y = pad;
-    font::text(frame, pad, y, "ATTACK", 2, dim);
-    font::text(
-        frame,
-        pad + font::width("ATTACK ", 2),
-        y,
-        &format!("{}", w.stats.alive[0]),
-        2,
-        red,
-    );
     let mid = frame.w as i32 / 2;
-    font::text(frame, mid, y, "DEFEND", 2, dim);
-    font::text(
-        frame,
-        mid + font::width("DEFEND ", 2),
-        y,
-        &format!("{}", w.stats.alive[1]),
-        2,
-        blue,
-    );
 
-    y += 22;
-    font::text(
+    // 위쪽 전황
+    let mut y = pad;
+    let x = uifont::text(frame, pad, y, "공격 ", 1, dim);
+    uifont::text(frame, x, y, &format!("{}", w.stats.alive[0]), 1, red);
+    let x = uifont::text(frame, mid, y, "방어 ", 1, dim);
+    uifont::text(frame, x, y, &format!("{}", w.stats.alive[1]), 1, blue);
+
+    y += 20;
+    uifont::text(
         frame,
         pad,
         y,
-        &format!("DEAD {} / {}", w.stats.dead[0], w.stats.dead[1]),
+        &format!("전사 {} / {}", w.stats.dead[0], w.stats.dead[1]),
         1,
         dim,
     );
-    font::text(
+    uifont::text(
         frame,
         mid,
         y,
-        &format!("ROUT {} / {}", w.stats.routed[0], w.stats.routed[1]),
+        &format!("패주 {} / {}", w.stats.routed[0], w.stats.routed[1]),
         1,
         dim,
     );
 
-    y += 14;
-    font::text(
+    y += 20;
+    let secs = w.tick as f32 * DT;
+    uifont::text(
         frame,
         pad,
         y,
         &format!(
-            "T {:.0}S   X{}   {}FPS",
-            w.tick as f32 * DT,
+            "{}분 {}초   {}배속   {} FPS",
+            secs as u32 / 60,
+            secs as u32 % 60,
             speed,
             fps as i32
         ),
@@ -623,12 +615,17 @@ pub fn draw_hud(
         dim,
     );
     if paused {
-        font::text(frame, mid, y, "PAUSED", 1, ink);
+        uifont::text(frame, mid, y, "멈춤", 1, ink);
+    }
+    // 기계가 못 따라와 배속을 낮췄다는 안내 같은 것
+    if let Some(n) = note {
+        y += 20;
+        uifont::text(frame, pad, y, n, 1, rgb(232, 176, 92));
     }
 
     // 아래쪽 병력 막대 — 양쪽이 서로를 밀어내는 모양으로
     let total = (w.stats.alive[0] + w.stats.alive[1]).max(1) as f32;
-    let bar_y = frame.h as i32 - 26;
+    let bar_y = frame.h as i32 - 30;
     let bar_w = frame.w as i32 - pad * 2;
     let split = (w.stats.alive[0] as f32 / total * bar_w as f32) as i32;
     for x in 0..bar_w {
@@ -639,32 +636,31 @@ pub fn draw_hud(
     }
 
     // 조작 안내
-    font::text(
+    uifont::text(
         frame,
         pad,
-        frame.h as i32 - 16,
-        "SPACE PAUSE   BRACKETS SPEED   WASD PAN   WHEEL ZOOM   F FIT   R RESET",
+        frame.h as i32 - 22,
+        "스페이스 멈춤 · [ ] 배속 · WASD 이동 · 휠 확대 · F 전체 · R 다시 · ESC 나가기",
         1,
-        rgb(96, 96, 90),
+        rgb(104, 104, 98),
     );
 
     // 결판이 났으면 크게 알린다
     let verdict = match outcome {
-        Outcome::Victory(0) => Some("ATTACKER WINS"),
-        Outcome::Victory(_) => Some("DEFENDER WINS"),
-        Outcome::Timeout => Some("NO DECISION"),
+        Outcome::Victory(0) => Some("공격측 승리"),
+        Outcome::Victory(_) => Some("방어측 승리"),
+        Outcome::Timeout => Some("결판 없음"),
         Outcome::Ongoing => None,
     };
     if let Some(v) = verdict {
-        let scale = 4;
-        let tw = font::width(v, scale);
-        font::text(
+        uifont::text_center(frame, mid, frame.h as i32 / 2 - 24, v, 3, ink);
+        uifont::text_center(
             frame,
-            (frame.w as i32 - tw) / 2,
-            frame.h as i32 / 2 - 20,
-            v,
-            scale,
-            ink,
+            mid,
+            frame.h as i32 / 2 + 34,
+            "ENTER  결과 보기",
+            1,
+            rgb(232, 176, 92),
         );
     }
 }

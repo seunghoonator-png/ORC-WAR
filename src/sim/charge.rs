@@ -9,7 +9,7 @@ use rayon::prelude::*;
 
 use crate::sim::pool::{UnitState, NO_TARGET};
 use crate::sim::unit_types::stats;
-use crate::sim::{World, CHUNK};
+use crate::sim::{Cause, Death, World, CHUNK};
 
 /// 이 거리 안에 목표가 들어오면 가속을 시작한다(m)
 const CHARGE_TRIGGER: f32 = 28.0;
@@ -267,8 +267,12 @@ pub fn step(w: &mut World) {
                     w.pool.target[u] = NO_TARGET;
                     w.pool.vel[u] = [0.0, 0.0];
                     deaths[w.pool.team[u] as usize] += 1;
-                    w.death_events
-                        .push((w.pool.pos[u], w.pool.team[u], w.pool.type_id[u]));
+                    w.death_events.push(Death {
+                        pos: w.pool.pos[u],
+                        team: w.pool.team[u],
+                        type_id: w.pool.type_id[u],
+                        cause: Cause::Charge,
+                    });
                 }
             }
         }

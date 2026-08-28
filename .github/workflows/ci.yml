@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  test:
+    name: 테스트 (헤드리스)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: 서식
+        run: cargo fmt --all -- --check
+      # 창이 없는 러너이므로 minifb 없이 빌드한다. 시뮬과 화면 그리기는
+      # 창과 무관하므로 회귀 테스트는 전부 여기서 돈다
+      - name: clippy
+        run: cargo clippy --all-targets --no-default-features
+      - name: 테스트
+        run: cargo test --release --no-default-features
+
+  regression:
+    name: 회귀 시나리오
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: 자체 점검
+        # 러너는 코어가 적어 30만 실시간 항목은 떨어질 수 있다.
+        # 여기서 보려는 것은 "끝까지 도는가" 이므로 종료 코드는 보지 않는다
+        run: cargo run --release --no-default-features -- --selftest || true
+      - name: 병종 상성
+        run: |
+          cargo run --release --no-default-features -- --matchup 6 600 3 600
+          cargo run --release --no-default-features -- --matchup 6 600 1 600
+          cargo run --release --no-default-features -- --matchup 3 600 2 600
+      - name: 공성전
+        run: cargo run --release --no-default-features -- --siege 8000 3000 1
+
+  windows:
+    name: Windows 실행파일
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+      - uses: Swatinem/rust-cache@v2
+      - name: mingw 설치
+        run: sudo apt-get update && sudo apt-get install -y mingw-w64
+      - name: 크로스 빌드
+        run: cargo build --release --target x86_64-pc-windows-gnu
+      - name: 배포본 꾸리기
+        run: |
+          mkdir -p out
+          cp target/x86_64-pc-windows-gnu/release/orc-war.exe out/
+          cp dist/*.bat dist/*.txt out/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: orc-war-windows
+          path: out/

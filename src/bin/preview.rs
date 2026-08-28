@@ -117,7 +117,7 @@ fn main() -> std::io::Result<()> {
         t_naive / LIVE as f64,
         deaths as f64 / LIVE as f64
     );
-    draw_hud(&mut frame, &world, 2.0, false, 60.0, outcome);
+    draw_hud(&mut frame, &world, 2.0, false, 60.0, outcome, None);
     println!(
         "  렌더 {:.2} ms/frame  (지형 {:.2} + 병력 {:.2})  {}x{}",
         (t_ground + t_units) / REPS as f64,

@@ -11,7 +11,7 @@ use rayon::prelude::*;
 
 use crate::sim::pool::{UnitState, NO_TARGET};
 use crate::sim::unit_types::stats;
-use crate::sim::{World, CHUNK, DT};
+use crate::sim::{Cause, Death, World, CHUNK, DT};
 
 /// 동시에 날 수 있는 발사체 상한
 pub const MAX_PROJECTILES: usize = 200_000;
@@ -177,13 +177,17 @@ fn fire(w: &mut World) {
 
                 // 코앞에 적이 있으면 활을 쏠 계제가 아니다
                 let mut threatened = false;
-                grid.for_each_near(p, MELEE_THRESHOLD, |it| {
+                // 하나만 찾으면 끝나는 물음이다. 끝까지 훑을 이유가 없다 —
+                // 6m 반경이면 밀집 전장에서 칸 마흔아홉 개다
+                grid.for_each_near_while(p, MELEE_THRESHOLD, |it| {
                     if it.team != my_team {
                         let d = [it.pos[0] - p[0], it.pos[1] - p[1]];
                         if d[0] * d[0] + d[1] * d[1] < MELEE_THRESHOLD * MELEE_THRESHOLD {
                             threatened = true;
+                            return false;
                         }
                     }
+                    true
                 });
                 if threatened {
                     continue;
@@ -274,77 +278,87 @@ fn fire(w: &mut World) {
 }
 
 /// 이번 틱에 떨어지는 발사체를 판정한다.
+///
+/// 맞을 사람을 고르는 일은 발사체마다 독립이므로 병렬로 돌린다. 다만 **피해를
+/// 적용하는 것은 발사체 번호 순의 순차 패스**로 남긴다 — 스레드 수가 결과를
+/// 바꾸면 안 되기 때문이다. (실측: 공성 30만 최악 틱의 사격 29.9ms → 9ms)
 fn land(w: &mut World) {
     let tick = w.tick;
     let seed = w.seed;
 
-    let mut hits: Vec<(u32, f32)> = Vec::new();
-    let mut spent: Vec<u32> = Vec::new();
+    let spent: Vec<u32> = (0..w.projectiles.live.len())
+        .filter(|i| w.projectiles.live[*i] && w.projectiles.land_tick[*i] == tick)
+        .map(|i| i as u32)
+        .collect();
 
-    for i in 0..w.projectiles.live.len() {
-        if !w.projectiles.live[i] || w.projectiles.land_tick[i] != tick {
-            continue;
-        }
-        spent.push(i as u32);
+    let grid = &w.grid;
+    let castle = &w.castle;
+    let terrain = &w.terrain;
+    let pool = &w.pool;
+    let proj = &w.projectiles;
 
-        let at = w.projectiles.landing[i];
-        let shooter_team = w.projectiles.team[i];
-        let dmg = w.projectiles.damage[i];
-        let pierce = w.projectiles.pierce[i];
+    let hits: Vec<(u32, f32)> = spent
+        .par_iter()
+        .filter_map(|&pi| {
+            let i = pi as usize;
+            let at = proj.landing[i];
+            let shooter_team = proj.team[i];
+            let dmg = proj.damage[i];
+            let pierce = proj.pierce[i];
 
-        // 착탄 지점에서 가장 가까운 하나만 맞는다. 아군이 서 있으면 아군이 맞는다.
-        let mut best = f32::MAX;
-        let mut victim = NO_TARGET;
-        w.grid.for_each_near(at, HIT_RADIUS, |it| {
-            let d = [it.pos[0] - at[0], it.pos[1] - at[1]];
-            let d2 = d[0] * d[0] + d[1] * d[1];
-            if d2 <= HIT_RADIUS * HIT_RADIUS && (d2 < best || (d2 == best && it.idx < victim)) {
-                best = d2;
-                victim = it.idx;
+            // 착탄 지점에서 가장 가까운 하나만 맞는다. 아군이 서 있으면 아군이 맞는다.
+            let mut best = f32::MAX;
+            let mut victim = NO_TARGET;
+            grid.for_each_near(at, HIT_RADIUS, |it| {
+                let d = [it.pos[0] - at[0], it.pos[1] - at[1]];
+                let d2 = d[0] * d[0] + d[1] * d[1];
+                if d2 <= HIT_RADIUS * HIT_RADIUS && (d2 < best || (d2 == best && it.idx < victim)) {
+                    best = d2;
+                    victim = it.idx;
+                }
+            });
+            if victim == NO_TARGET {
+                return None;
             }
-        });
-        if victim == NO_TARGET {
-            continue;
-        }
-        let v = victim as usize;
-        let s = stats(w.pool.type_id[v]);
+            let v = victim as usize;
+            let s = stats(pool.type_id[v]);
 
-        // 방패는 화살을 상당히 막아준다. 다만 곡사로 떨어지는 것은 절반만.
-        // 흉벽 너머로 넘긴 화살은 위력을 잃는다.
-        //
-        // 이게 없으면 공격군이 성 밖에 선 채로 수비군을 활로만 지워 버린다.
-        // 성벽의 값어치는 사람을 막는 것만이 아니라 시선을 막는 데도 있다.
-        let mut wall_cover = 1.0f32;
-        if let Some(c) = &w.castle {
-            let inside = |p: [f32; 2]| {
-                (p[0] - c.center[0]).abs() < c.half[0] && (p[1] - c.center[1]).abs() < c.half[1]
-            };
-            let from = w.projectiles.origin[i];
-            if inside(at) != inside(from) {
-                wall_cover = 0.3;
+            // 방패는 화살을 상당히 막아준다. 다만 곡사로 떨어지는 것은 절반만.
+            // 흉벽 너머로 넘긴 화살은 위력을 잃는다.
+            //
+            // 이게 없으면 공격군이 성 밖에 선 채로 수비군을 활로만 지워 버린다.
+            // 성벽의 값어치는 사람을 막는 것만이 아니라 시선을 막는 데도 있다.
+            let mut wall_cover = 1.0f32;
+            if let Some(c) = castle {
+                let inside = |p: [f32; 2]| {
+                    (p[0] - c.center[0]).abs() < c.half[0] && (p[1] - c.center[1]).abs() < c.half[1]
+                };
+                if inside(at) != inside(proj.origin[i]) {
+                    wall_cover = 0.3;
+                }
             }
-        }
 
-        // 나뭇가지에 걸린다
-        let cover = w.terrain.at(at).arrow_block();
-        if cover > 0.0 {
-            let roll = crate::rng::unit_f32(seed ^ 0xC0FE, tick, victim as u64);
-            if roll < cover {
-                continue;
+            // 나뭇가지에 걸린다
+            let cover = terrain.at(at).arrow_block();
+            if cover > 0.0 {
+                let roll = crate::rng::unit_f32(seed ^ 0xC0FE, tick, victim as u64);
+                if roll < cover {
+                    return None;
+                }
             }
-        }
-        let mut d = dmg;
-        if s.shield > 0.0 {
-            let roll = crate::rng::unit_f32(seed ^ 0xB0B0, tick, victim as u64);
-            if roll < s.shield * 0.8 {
-                continue;
+            let mut d = dmg;
+            if s.shield > 0.0 {
+                let roll = crate::rng::unit_f32(seed ^ 0xB0B0, tick, victim as u64);
+                if roll < s.shield * 0.8 {
+                    return None;
+                }
             }
-        }
-        d *= (1.0 - (s.armor - pierce).max(0.0)) * wall_cover;
-        // 아군 오사도 그대로 들어간다
-        let _ = shooter_team;
-        hits.push((victim, d));
-    }
+            d *= (1.0 - (s.armor - pierce).max(0.0)) * wall_cover;
+            // 아군 오사도 그대로 들어간다
+            let _ = shooter_team;
+            Some((victim, d))
+        })
+        .collect();
 
     for i in spent {
         w.projectiles.live[i as usize] = false;
@@ -362,8 +376,12 @@ fn land(w: &mut World) {
             w.pool.target[vu] = NO_TARGET;
             w.pool.vel[vu] = [0.0, 0.0];
             deaths[w.pool.team[vu] as usize] += 1;
-            w.death_events
-                .push((w.pool.pos[vu], w.pool.team[vu], w.pool.type_id[vu]));
+            w.death_events.push(Death {
+                pos: w.pool.pos[vu],
+                team: w.pool.team[vu],
+                type_id: w.pool.type_id[vu],
+                cause: Cause::Missile,
+            });
         }
     }
     w.stats.dead[0] += deaths[0];

@@ -186,6 +186,32 @@ impl Grid {
         )
     }
 
+    /// 주변 셀의 항목을 순회하되, 닫힘이 false 를 돌려주면 거기서 멈춘다.
+    ///
+    /// 분리력처럼 "이웃 N명까지만 본다"는 상한이 있는 계산에서, 상한에 걸린
+    /// 뒤에도 남은 셀을 끝까지 훑으면 밀집한 곳에서 비용이 폭주한다.
+    /// (실측: 공성 30만 성문 정체 구간에서 이동 133ms → 30ms)
+    #[inline(always)]
+    pub fn for_each_near_while<F: FnMut(&GridItem) -> bool>(&self, p: [f32; 2], r: f32, mut f: F) {
+        if self.items.is_empty() {
+            return;
+        }
+        let (x0, x1, y0, y1) = self.cell_range(p, r);
+        for cy in y0..=y1 {
+            let row = cy * self.w;
+            for cx in x0..=x1 {
+                let c = row + cx;
+                let a = self.cell_start[c] as usize;
+                let b = self.cell_start[c + 1] as usize;
+                for it in &self.items[a..b] {
+                    if !f(it) {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
     /// 주변 셀의 항목을 순회한다.
     #[inline(always)]
     pub fn for_each_near<F: FnMut(&GridItem)>(&self, p: [f32; 2], r: f32, mut f: F) {

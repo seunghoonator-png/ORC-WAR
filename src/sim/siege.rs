@@ -9,7 +9,7 @@ use rayon::prelude::*;
 use crate::map::Terrain;
 use crate::sim::pool::{UnitState, NO_TARGET};
 use crate::sim::unit_types::{is_engine, stats};
-use crate::sim::{World, CHUNK, DT};
+use crate::sim::{Cause, Death, World, CHUNK, DT};
 
 /// 성벽에 붙어 기어오르는 데 걸리는 시간(틱)
 const CLIMB_TICKS: u16 = 200;
@@ -330,16 +330,18 @@ fn pour_from_walls(w: &mut World) {
             continue;
         }
         let mut struck = 0u32;
-        grid.for_each_near(pos[i], DROP_RANGE, |it| {
+        // 한 사람이 한 번에 하나를 맞힌다. 찾았으면 거기서 끊는다 —
+        // 14m 반경은 격자 칸 이백여 개다
+        grid.for_each_near_while(pos[i], DROP_RANGE, |it| {
             if struck >= DROP_TARGETS {
-                return;
+                return false;
             }
             if it.team == 1 {
-                return;
+                return true;
             }
             let d = [it.pos[0] - pos[i][0], it.pos[1] - pos[i][1]];
             if d[0] * d[0] + d[1] * d[1] > DROP_RANGE * DROP_RANGE {
-                return;
+                return true;
             }
             struck += 1;
             // 기어오르는 중이면 몸을 가릴 수 없다
@@ -349,6 +351,7 @@ fn pour_from_walls(w: &mut World) {
                 1.0
             };
             hits.push((it.idx, DROP_DAMAGE * mult));
+            true
         });
     }
 
@@ -366,8 +369,12 @@ fn pour_from_walls(w: &mut World) {
             w.pool.target[vu] = NO_TARGET;
             w.pool.vel[vu] = [0.0, 0.0];
             deaths[w.pool.team[vu] as usize] += 1;
-            w.death_events
-                .push((w.pool.pos[vu], w.pool.team[vu], w.pool.type_id[vu]));
+            w.death_events.push(Death {
+                pos: w.pool.pos[vu],
+                team: w.pool.team[vu],
+                type_id: w.pool.type_id[vu],
+                cause: Cause::Drop,
+            });
         }
     }
     w.stats.dead[0] += deaths[0];

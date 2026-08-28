@@ -125,13 +125,17 @@ pub fn step(w: &mut World) {
                 let mut push = [0.0f32, 0.0];
                 let mut fix = [0.0f32, 0.0];
                 let mut seen = 0u32;
-                grid.for_each_near(p, sep_r, |it| {
+                // 상한에 걸리면 그 자리에서 순회를 끊는다. 예전에는 닫힘 안에서만
+                // 빠져나와, 상한을 넘긴 뒤에도 남은 셀을 끝까지 훑고 있었다 —
+                // 성문 앞처럼 사람이 뭉친 곳에서 그 비용이 폭주했다.
+                // 상한 뒤로는 어차피 아무 일도 하지 않으므로 결과는 똑같다.
+                grid.for_each_near_while(p, sep_r, |it| {
                     if seen >= MAX_SEP_NEIGHBORS {
-                        return;
+                        return false;
                     }
                     let j = it.idx as usize;
                     if j == i {
-                        return;
+                        return true;
                     }
                     let d = [p[0] - it.pos[0], p[1] - it.pos[1]];
                     let d2 = d[0] * d[0] + d[1] * d[1];
@@ -140,7 +144,7 @@ pub fn step(w: &mut World) {
                         min_d *= ENEMY_SPACING;
                     }
                     if d2 >= min_d * min_d {
-                        return;
+                        return true;
                     }
                     seen += 1;
                     if d2 > 1e-6 {
@@ -158,6 +162,7 @@ pub fn step(w: &mut World) {
                         push[0] += a;
                         push[1] += b;
                     }
+                    true
                 });
 
                 // --- 3. 속도 적분 ---

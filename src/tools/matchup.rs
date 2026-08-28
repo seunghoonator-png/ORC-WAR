@@ -1,11 +1,13 @@
 //! 병종 상성 확인 — 두 병종을 붙여놓고 결과를 본다.
+//!
+//! `orc-war --matchup <병종A> <수A> <병종B> <수B> [간격] [씨앗] [지형]`
 
-use orc_war::scenario::Scenario;
-use orc_war::sim::unit_types::{stats, UNIT_STATS};
-use orc_war::sim::Outcome;
+use crate::scenario::Scenario;
+use crate::sim::unit_types::{stats, UNIT_STATS};
+use crate::sim::Outcome;
 
-fn main() {
-    let mut a = std::env::args().skip(1);
+pub fn run(argv: &[String]) {
+    let mut a = argv.iter().cloned();
     let ta: u8 = a.next().and_then(|s| s.parse().ok()).unwrap_or(6);
     let na: u32 = a.next().and_then(|s| s.parse().ok()).unwrap_or(500);
     let tb: u8 = a.next().and_then(|s| s.parse().ok()).unwrap_or(0);
@@ -22,8 +24,8 @@ fn main() {
     }
 
     let max_ticks = 6_000;
-    use orc_war::map::gen::{MapKind, MapOptions};
-    let map = std::env::args().nth(7).unwrap_or_else(|| "plains".into());
+    use crate::map::gen::{MapKind, MapOptions};
+    let map = argv.get(6).cloned().unwrap_or_else(|| "plains".into());
     let opts = match map.as_str() {
         "hills" => MapOptions {
             kind: MapKind::Hills,

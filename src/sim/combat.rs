@@ -8,7 +8,7 @@ use rayon::prelude::*;
 
 use crate::sim::pool::{UnitState, NO_TARGET};
 use crate::sim::unit_types::stats;
-use crate::sim::{World, CHUNK};
+use crate::sim::{Cause, Death, World, CHUNK};
 
 /// 대상 재탐색 주기(틱). 유닛마다 위상을 어긋나게 해서 부하를 고르게 편다.
 const RETARGET_PERIOD: u64 = 4;
@@ -186,8 +186,12 @@ pub fn step(w: &mut World) {
                 w.pool.target[t] = NO_TARGET;
                 w.pool.vel[t] = [0.0, 0.0];
                 deaths[w.pool.team[t] as usize] += 1;
-                w.death_events
-                    .push((w.pool.pos[t], w.pool.team[t], w.pool.type_id[t]));
+                w.death_events.push(Death {
+                    pos: w.pool.pos[t],
+                    team: w.pool.team[t],
+                    type_id: w.pool.type_id[t],
+                    cause: Cause::Melee,
+                });
             }
         }
     }
