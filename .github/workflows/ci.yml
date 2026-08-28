@@ -37,9 +37,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: 자체 점검
-        # 러너는 코어가 적어 30만 실시간 항목은 떨어질 수 있다.
-        # 여기서 보려는 것은 "끝까지 도는가" 이므로 종료 코드는 보지 않는다
-        run: cargo run --release --no-default-features -- --selftest || true
+        # 종료 코드 2 는 "동작은 맞는데 이 기계가 30만을 실시간으로 못 돌린다"다.
+        # 러너는 코어가 적으니 그것은 통과로 친다. 1(동작 이상)은 실패로 남긴다 —
+        # `|| true` 로 뭉개면 진짜 회귀까지 같이 삼킨다
+        run: |
+          cargo run --release --no-default-features -- --selftest || \
+            { code=$?; if [ "$code" -ne 2 ]; then exit "$code"; fi; \
+              echo "성능 항목만 미달 (코어 수 탓) — 통과로 친다"; }
       - name: 병종 상성
         run: |
           cargo run --release --no-default-features -- --matchup 6 600 3 600

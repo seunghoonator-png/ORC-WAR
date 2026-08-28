@@ -27,7 +27,7 @@ fn setup_console() {}
 ///
 /// 콘솔 서브시스템으로 빌드해야 `--bench` 결과를 콘솔에서 볼 수 있는데, 그러면
 /// 더블클릭했을 때 검은 창이 하나 같이 뜬다. 창 모드로 갈 때만 닫는다.
-#[cfg(windows)]
+#[cfg(all(windows, feature = "render"))]
 fn detach_console() {
     extern "system" {
         fn FreeConsole() -> i32;
@@ -37,7 +37,8 @@ fn detach_console() {
     }
 }
 
-#[cfg(not(windows))]
+// 화면이 없는 빌드에는 뗄 콘솔도 없다
+#[cfg(all(not(windows), feature = "render"))]
 fn detach_console() {}
 
 /// 탐색기에서 더블클릭해 띄웠다면 결과를 읽기도 전에 창이 닫힌다.
@@ -124,9 +125,11 @@ fn main() {
             return;
         }
         "--selftest" => {
-            let ok = orc_war::tools::selftest::run(&argv[1..]);
+            // 종료 코드: 0 전부 통과 · 2 성능만 미달 · 1 동작이 어긋남.
+            // 코어가 적은 CI 러너에서 성능 미달과 진짜 회귀를 갈라 보기 위한 것이다.
+            let verdict = orc_war::tools::selftest::run(&argv[1..]);
             hold_window_open();
-            std::process::exit(if ok { 0 } else { 1 });
+            std::process::exit(verdict.exit_code());
         }
         _ => {}
     }
