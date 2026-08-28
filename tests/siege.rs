@@ -181,3 +181,55 @@ fn an_intact_castle_is_sealed() {
         "성문에서 먼 곳에도 해자를 건너는 길이 있다"
     );
 }
+
+/// 돌벽을 무너뜨리는 것은 공성병기여야 한다.
+///
+/// 예전에는 그렇지 않았다. 보병 하나가 벽에 주는 피해가 1이어도 수천 명이
+/// 곱해지고, 게다가 사수까지 사거리 안의 성벽을 헐고 있었다. 그래서 파성추와
+/// 투석기를 통째로 빼도 성이 같은 시각에 똑같이 무너졌다 — 공성병기 전체가
+/// 장식이었다는 뜻이다. 눈으로는 "성이 잘 함락된다"로만 보인다.
+#[test]
+fn only_engines_bring_down_stone() {
+    use orc_war::sim::unit_types::{CATAPULT, LADDER, RAM};
+
+    // 공성병기를 뺀 편성으로 같은 공성을 돌린다
+    let run_without = |strip: &[u8]| -> (usize, bool, u64) {
+        let mut sc = Scenario::siege(24_000, 6_000, 1, 12_000, true);
+        sc.formations.retain(|f| !strip.contains(&f.type_id));
+        let mut w = sc.build();
+        loop {
+            w.step();
+            if !matches!(w.outcome(sc.max_ticks), Outcome::Ongoing) {
+                break;
+            }
+        }
+        let c = w.castle.as_ref().unwrap();
+        (
+            c.segments
+                .iter()
+                .filter(|s| s.breached && !s.is_gate)
+                .count(),
+            c.segments.iter().any(|s| s.is_gate && s.breached),
+            w.stats.wall_breaches_climbed,
+        )
+    };
+
+    let (walls_bare, gate_bare, climbed_bare) = run_without(&[RAM, CATAPULT, LADDER]);
+    assert_eq!(
+        walls_bare, 0,
+        "공성병기 없이 돌벽 {walls_bare}구간이 무너졌다 — 병기가 장식이 된다"
+    );
+    // 성문은 나무다. 도끼와 손으로도 결국 열린다
+    assert!(gate_bare, "맨몸으로는 성문조차 열지 못한다");
+    // 벽이 서 있으면 누군가는 기어올라야 한다
+    assert!(
+        climbed_bare > 0,
+        "돌벽이 멀쩡한데 성벽을 넘어간 사람이 하나도 없다 — 등반 경로가 죽어 있다"
+    );
+
+    let (walls_full, _, _) = run_without(&[]);
+    assert!(
+        walls_full > 0,
+        "공성병기를 다 주었는데도 돌벽이 한 구간도 무너지지 않았다"
+    );
+}

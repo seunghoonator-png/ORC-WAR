@@ -76,8 +76,8 @@ fn batter_structures(w: &mut World) {
     let terrain = &w.terrain;
     let pool = &w.pool;
 
-    // (구간 번호, 피해) 를 모은다
-    let hits: Vec<Vec<(usize, f32)>> = (0..n.div_ceil(CHUNK))
+    // (구간 번호, 피해, 때린 사람) 을 모은다
+    let hits: Vec<Vec<(usize, f32, u32)>> = (0..n.div_ceil(CHUNK))
         .into_par_iter()
         .map(|ci| {
             let lo = ci * CHUNK;
@@ -95,12 +95,18 @@ fn batter_structures(w: &mut World) {
                 if s.siege_dmg <= 0.0 || pool.cooldown[i] > 0 {
                     continue;
                 }
-                // 투석기가 아니면 성에 붙어 있어야 한다
-                if s.range <= 0.0 && !near_castle(pool.pos[i], castle) {
+                // 멀리서 성벽을 때리는 것은 **투석기뿐**이다.
+                //
+                // 예전에는 조건이 `range > 0` 이라 궁수까지 여기 들어왔다.
+                // 공격군의 사수 수천 명이 화살로 돌벽을 헐어 무너뜨리고 있었고,
+                // 그래서 공성병기를 통째로 빼도 성이 같은 시각에 떨어졌다.
+                let engine = is_engine(pool.type_id[i]);
+                let bombard = engine && s.range > 0.0;
+                if !bombard && !near_castle(pool.pos[i], castle) {
                     continue;
                 }
 
-                let probe = if s.range > 0.0 {
+                let probe = if bombard {
                     // 투석기는 멀리서 가장 가까운 성벽 구간을 노린다
                     let mut best = f32::MAX;
                     let mut aim = None;
@@ -120,7 +126,7 @@ fn batter_structures(w: &mut World) {
                     }
                     match aim {
                         Some(k) => {
-                            out.push((k, s.siege_dmg));
+                            out.push((k, s.siege_dmg, i as u32));
                             continue;
                         }
                         None => continue,
@@ -138,7 +144,16 @@ fn batter_structures(w: &mut World) {
                     continue;
                 }
                 if let Some(k) = castle.segment_at(probe) {
-                    out.push((k, s.siege_dmg));
+                    // 돌벽은 사람 무기로 어쩌지 못한다. 성문은 나무라 도끼로도 깨진다.
+                    //
+                    // 이 구분이 없으면 공성병기가 장식이 된다: 보병 하나가 주는
+                    // 피해가 1이어도 성벽에 붙은 수천 명이 곱해지면 파성추보다
+                    // 훨씬 빠르다. (실측: 병기를 전부 빼도 성벽 7구간이 같은
+                    // 시각에 똑같이 무너졌다)
+                    if !castle.segments[k].is_gate && !engine {
+                        continue;
+                    }
+                    out.push((k, s.siege_dmg, i as u32));
                 }
             }
             out
@@ -150,7 +165,7 @@ fn batter_structures(w: &mut World) {
     {
         let castle = w.castle.as_mut().unwrap();
         for chunk in &hits {
-            for &(k, dmg) in chunk {
+            for &(k, dmg, _) in chunk {
                 let seg = &mut castle.segments[k];
                 if seg.breached {
                     continue;
@@ -164,17 +179,17 @@ fn batter_structures(w: &mut World) {
         }
     }
 
-    // 쿨다운을 다시 채운다
+    // 때린 사람에게 쿨다운을 물린다.
+    //
+    // 예전에는 공성병기에만 물렸다. 그래서 성벽에 붙은 보병은 초당 스무 번씩
+    // 벽을 때렸다 — 공성병기가 있으나 없으나 성이 같은 시각에 무너진 원인이다.
     let pool = &mut w.pool;
-    pool.cooldown
-        .par_iter_mut()
-        .enumerate()
-        .for_each(|(i, cd)| {
-            let s = stats(pool_type(i, &pool.type_id));
-            if s.siege_dmg > 0.0 && *cd == 0 && is_engine(pool_type(i, &pool.type_id)) {
-                *cd = s.attack_period;
-            }
-        });
+    for chunk in &hits {
+        for &(_, _, u) in chunk {
+            let ui = u as usize;
+            pool.cooldown[ui] = stats(pool.type_id[ui]).attack_period;
+        }
+    }
 
     if breached.is_empty() {
         return;
@@ -193,11 +208,6 @@ fn batter_structures(w: &mut World) {
         let seg = &w.castle.as_ref().unwrap().segments[k];
         w.breach_events.push(seg.center);
     }
-}
-
-#[inline]
-fn pool_type(i: usize, types: &[u8]) -> u8 {
-    types[i]
 }
 
 /// 성벽에 달라붙어 기어오른다.
