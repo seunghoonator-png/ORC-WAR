@@ -5,12 +5,19 @@ edition = "2021"
 
 [dependencies]
 rayon = "1.10"
+# 창과 화소 버퍼, 입력을 한꺼번에 해결한다. Windows 에서 win32 를 직접 쓰므로
+# 외장/내장 GPU 를 잘못 잡는 하이브리드 노트북 문제를 아예 비켜간다.
+minifb = { version = "0.28", optional = true }
 
 [features]
-default = []
-# 렌더링은 GUI가 필요하므로 기능 게이트 뒤에 둔다.
+default = ["render"]
+# 창이 필요한 것은 이 기능 뒤에 둔다.
 # 헤드리스 CI/서버에서는 --no-default-features 로 시뮬만 빌드·테스트한다.
-render = []
+render = ["dep:minifb"]
+
+[[bin]]
+name = "watch"
+required-features = ["render"]
 
 [profile.release]
 opt-level = 3

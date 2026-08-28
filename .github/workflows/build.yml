@@ -22,9 +22,10 @@ jobs:
       - name: 서식 검사
         run: cargo fmt --check
       - name: 린트
-        run: cargo clippy --all-targets -- -D warnings
+        # 리눅스 러너에는 창을 띄울 것이 없으므로 시뮬만 검사한다
+        run: cargo clippy --all-targets --no-default-features -- -D warnings
       - name: 테스트
-        run: cargo test --release
+        run: cargo test --release --no-default-features
 
   windows:
     name: Windows 실행파일
@@ -42,7 +43,10 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path package | Out-Null
           Copy-Item target/release/orc-war.exe package/
+          Copy-Item target/release/watch.exe package/
           Copy-Item target/release/snapshot.exe package/
+          Copy-Item target/release/matchup.exe package/
+          Copy-Item target/release/siege.exe package/
           Copy-Item dist/*.bat package/
           Copy-Item dist/*.txt package/
       - uses: actions/upload-artifact@v4
