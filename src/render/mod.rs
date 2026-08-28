@@ -10,7 +10,7 @@ use rayon::prelude::*;
 
 use crate::map::Terrain;
 use crate::sim::pool::UnitState;
-use crate::sim::unit_types::{is_engine, stats};
+use crate::sim::unit_types::{is_engine, stats, N_TYPES};
 use crate::sim::{Outcome, World, DT};
 
 /// 화면과 월드 사이의 변환.
@@ -373,7 +373,55 @@ impl GroundCache {
     }
 }
 
+/// 병종·진영·패주 조합별 색을 미리 뽑아 둔다.
+///
+/// 30만 번 스탯 표를 뒤지며 분기하느니 44칸짜리 표를 한 번 만드는 편이 싸다.
+/// 색은 카메라와 무관하므로 값 자체는 매 프레임 똑같다.
+fn unit_palette() -> [u32; N_TYPES * 4] {
+    let mut pal = [0u32; N_TYPES * 4];
+    for ty in 0..N_TYPES {
+        let s = stats(ty as u8);
+        for team in 0..2usize {
+            for rout in 0..2usize {
+                let c = if is_engine(ty as u8) {
+                    rgb(196, 168, 96) // 공성병기는 나무빛
+                } else if rout == 1 {
+                    // 등을 보인 병력은 흐릿하게
+                    if team == 0 {
+                        rgb(120, 62, 58)
+                    } else {
+                        rgb(58, 78, 120)
+                    }
+                } else if s.is_cavalry {
+                    if team == 0 {
+                        rgb(255, 150, 90)
+                    } else {
+                        rgb(120, 210, 255)
+                    }
+                } else if s.range > 0.0 {
+                    if team == 0 {
+                        rgb(226, 96, 74)
+                    } else {
+                        rgb(96, 150, 236)
+                    }
+                } else if team == 0 {
+                    rgb(214, 52, 44)
+                } else {
+                    rgb(58, 106, 214)
+                };
+                pal[ty * 4 + team * 2 + rout] = c;
+            }
+        }
+    }
+    pal
+}
+
 /// 병력과 날아가는 것들을 그린다.
+///
+/// 풀을 처음부터 끝까지 훑지 않고 **공간 그리드를 훑는다**. 그리드는 이미
+/// 살아있는 유닛만, 셀 순서대로 담고 있어서 (1) 죽은 자리를 건너뛰는 분기가
+/// 사라지고 (2) 위치·병종·진영이 한 캐시 줄에 붙어 오며 (3) 화면 밖 셀은
+/// 통째로 건너뛸 수 있다. 확대할수록 세 번째가 크게 듣는다.
 pub fn draw_units(frame: &mut Frame, world: &World, cam: &Camera) {
     let (w, h) = (frame.w, frame.h);
     let mpp = cam.mpp;
@@ -389,53 +437,108 @@ pub fn draw_units(frame: &mut Frame, world: &World, cam: &Camera) {
     };
 
     let bounds = cam.view_bounds(w, h);
-    let pool = &world.pool;
-    for i in 0..pool.len() {
-        let p = pool.pos[i];
-        if p[0] < bounds[0] || p[0] > bounds[2] || p[1] < bounds[1] || p[1] > bounds[3] {
-            continue;
-        }
-        let st = pool.state[i];
-        if matches!(st, UnitState::Dead | UnitState::Fled) {
-            continue;
-        }
-        let (sx, sy) = cam.to_screen(p, w, h);
-        let ty = pool.type_id[i];
-        let s = stats(ty);
-        let team = pool.team[i];
+    let grid = &world.grid;
 
-        let c = if is_engine(ty) {
-            rgb(196, 168, 96) // 공성병기는 나무빛
-        } else if st == UnitState::Rout {
-            // 등을 보인 병력은 흐릿하게
-            if team == 0 {
-                rgb(120, 62, 58)
-            } else {
-                rgb(58, 78, 120)
+    if !grid.items.is_empty() {
+        let pal = unit_palette();
+        // 공성병기는 조금 크게 찍는다. 이것도 표로 뽑아 분기를 없앤다
+        let mut blot_size = [size; N_TYPES];
+        for (ty, s) in blot_size.iter_mut().enumerate() {
+            if is_engine(ty as u8) {
+                *s = size + 2;
             }
-        } else if s.is_cavalry {
-            if team == 0 {
-                rgb(255, 150, 90)
-            } else {
-                rgb(120, 210, 255)
-            }
-        } else if s.range > 0.0 {
-            if team == 0 {
-                rgb(226, 96, 74)
-            } else {
-                rgb(96, 150, 236)
-            }
-        } else if team == 0 {
-            rgb(214, 52, 44)
-        } else {
-            rgb(58, 106, 214)
-        };
+        }
 
-        let engine_size = if is_engine(ty) { size + 2 } else { size };
-        frame.blot(sx as i32, sy as i32, engine_size, c);
+        let state = &world.pool.state;
+        let y_top = cam.center[1] + h as f32 * 0.5 * mpp;
+        let x_left = cam.center[0] - w as f32 * 0.5 * mpp;
+        // 유닛마다 mpp 로 나누면 나눗셈만 50만 번이다. 역수를 미리 뽑아 둔다
+        let inv = 1.0 / mpp;
+        let cell = grid.cell_size;
+        // 유닛 하나가 번져 나가는 폭(m). 셀 범위를 이만큼 넉넉히 잡는다
+        let bleed = (size + 2) as f32 * mpp;
+
+        // 격자가 덮는 월드 구간. 화면이 이 밖이면 훑을 것이 없다
+        let gx = [grid.origin[0], grid.origin[0] + grid.w as f32 * cell];
+        let gy = [grid.origin[1], grid.origin[1] + grid.h as f32 * cell];
+
+        // 가로 셀 범위는 띠마다 같으니 한 번만 낸다
+        let cx0 = (((bounds[0] - bleed - grid.origin[0]) / cell).floor() as isize)
+            .clamp(0, grid.w as isize - 1) as usize;
+        let cx1 = (((bounds[2] + bleed - grid.origin[0]) / cell).floor() as isize)
+            .clamp(0, grid.w as isize - 1) as usize;
+        let x_hit = bounds[2] + bleed >= gx[0] && bounds[0] - bleed <= gx[1];
+
+        // 화면을 가로 띠로 갈라 코어에 나눠 준다. 띠마다 자기 줄만 건드리므로
+        // 잠금이 필요 없고, 각 띠는 자기 y 범위에 걸치는 셀만 훑는다.
+        //
+        // 띠 폭은 **병력이 실제로 찍히는 줄 수**로 나눈다. 전군이 화면 한복판
+        // 좁은 띠에 몰려 있는 것이 보통이라, 화면 전체를 균등히 나누면 일감이
+        // 한두 띠에 쏠린다. 반대로 너무 잘게 쪼개면 띠마다 경계 셀을 겹쳐 훑는
+        // 낭비가 커진다 — 코어당 서너 조각이 그 사이의 절충이다.
+        let occupied = (((gy[1] - gy[0]) / mpp).ceil() as usize).clamp(1, h);
+        let band_rows = (occupied / (rayon::current_num_threads() * 2).max(1)).clamp(8, h);
+
+        frame
+            .px
+            .par_chunks_mut(band_rows * w)
+            .enumerate()
+            .for_each(|(bi, band)| {
+                let ys0 = bi * band_rows;
+                let ys1 = ys0 + band.len() / w;
+                // 이 띠에 화소를 남길 수 있는 월드 y 구간.
+                // 화면 y 는 아래로 늘고 월드 y 는 위로 늘어 방향이 뒤집힌다.
+                let wy_lo = y_top - (ys1 + 1) as f32 * mpp;
+                let wy_hi = y_top - ys0 as f32 * mpp + bleed;
+                // 병력이 아예 없는 띠는 여기서 끝난다. 격자는 교전 구역만 덮으므로
+                // 넓게 빼서 보면 화면 대부분이 이 경우다
+                if !x_hit || wy_lo > gy[1] || wy_hi < gy[0] {
+                    return;
+                }
+                let cy0 = (((wy_lo - grid.origin[1]) / cell).floor() as isize)
+                    .clamp(0, grid.h as isize - 1) as usize;
+                let cy1 = (((wy_hi - grid.origin[1]) / cell).floor() as isize)
+                    .clamp(0, grid.h as isize - 1) as usize;
+
+                for cy in cy0..=cy1 {
+                    let row = cy * grid.w;
+                    // 한 줄의 셀은 items 안에서 연속이므로 통째로 잘라 훑는다
+                    let a = grid.cell_start[row + cx0] as usize;
+                    let b = grid.cell_start[row + cx1 + 1] as usize;
+                    for it in &grid.items[a..b] {
+                        let st = state[it.idx as usize];
+                        // 그리드는 틱 중간에 만들어지므로, 그 뒤 전투에서 쓰러진
+                        // 유닛이 아직 남아 있다. 상태는 원본에서 확인한다
+                        let rout = match st {
+                            UnitState::Dead | UnitState::Fled => continue,
+                            UnitState::Rout => 1,
+                            _ => 0,
+                        };
+                        let ty = it.type_id as usize;
+                        let es = blot_size[ty];
+                        let px = ((it.pos[0] - x_left) * inv) as i32;
+                        let py = ((y_top - it.pos[1]) * inv) as i32;
+                        let x0 = px.max(0);
+                        let x1 = (px + es).min(w as i32);
+                        let y0 = py.max(ys0 as i32);
+                        let y1 = (py + es).min(ys1 as i32);
+                        if x1 <= x0 || y1 <= y0 {
+                            continue;
+                        }
+                        let c = pal[ty * 4 + it.team as usize * 2 + rout];
+                        // 한 번 잘라 두고 채운다. 화소마다 경계를 따지지 않는다
+                        for y in y0..y1 {
+                            let o = (y as usize - ys0) * w;
+                            for x in x0..x1 {
+                                band[o + x as usize] = c;
+                            }
+                        }
+                    }
+                }
+            });
     }
 
-    // 날아가는 화살
+    // 날아가는 화살 — 수천 발뿐이라 굳이 나누지 않는다
     let tick = world.tick;
     let mut shots: Vec<([f32; 2], u8)> = Vec::new();
     world
