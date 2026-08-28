@@ -93,6 +93,8 @@ pub struct Decals {
     pub w: usize,
     pub h: usize,
     pub density: Vec<u16>,
+    /// 이번 틱에 값이 바뀐 칸. 배경을 통째로 다시 그리는 대신 여기만 덧칠한다.
+    pub dirty: Vec<u32>,
 }
 
 impl Decals {
@@ -103,16 +105,27 @@ impl Decals {
             w,
             h: w,
             density: vec![0; w * w],
+            dirty: Vec::new(),
         }
     }
 
+    /// 이번 틱의 사망을 받아 적는다.
+    ///
+    /// 한 프레임에 여러 틱을 돌릴 수 있으므로 여기서 목록을 비우면 안 된다.
+    /// 그리고 나서 `clear_dirty` 로 비운다.
     pub fn absorb(&mut self, world: &World) {
         for (p, _, _) in &world.death_events {
             let cx = ((p[0] / self.cell) as isize).clamp(0, self.w as isize - 1) as usize;
             let cy = ((p[1] / self.cell) as isize).clamp(0, self.h as isize - 1) as usize;
             let i = cy * self.w + cx;
             self.density[i] = self.density[i].saturating_add(1);
+            self.dirty.push(i as u32);
         }
+    }
+
+    /// 배경에 반영이 끝났다는 표시.
+    pub fn clear_dirty(&mut self) {
+        self.dirty.clear();
     }
 
     #[inline(always)]
@@ -191,13 +204,51 @@ pub fn rgb(r: u8, g: u8, b: u8) -> u32 {
     ((r as u32) << 16) | ((g as u32) << 8) | b as u32
 }
 
+/// 화소 하나의 바탕색.
+#[inline(always)]
+fn ground_color(p: [f32; 2], world: &World, decals: &Decals) -> u32 {
+    let terrain = &world.terrain;
+    let ti = terrain.idx(p);
+    let t = terrain.kind[ti];
+    // 화소마다 고도를 보간하면 너무 비싸다. 칸 값을 그대로 쓴다
+    let elev = terrain.height[ti];
+    let shade = (elev * 0.42).clamp(-22.0, 74.0);
+    let base = match t {
+        Terrain::Plain => [30.0, 42.0, 28.0],
+        Terrain::Forest => [17.0, 39.0, 19.0],
+        Terrain::Rock => [64.0, 62.0, 58.0],
+        Terrain::Water => [22.0, 42.0, 78.0],
+        Terrain::Ford => [58.0, 82.0, 96.0],
+        Terrain::Marsh => [40.0, 44.0, 30.0],
+        Terrain::Wall => [150.0, 146.0, 136.0],
+        Terrain::Gate => [112.0, 84.0, 48.0],
+        Terrain::Rubble => [96.0, 90.0, 82.0],
+        Terrain::Moat => [26.0, 46.0, 72.0],
+    };
+    let mut r = base[0] + shade;
+    let mut g = base[1] + shade;
+    let mut b = base[2] + shade * 0.7;
+    // 시체가 쌓인 자리는 검붉게 물든다
+    let d = decals.smooth_at(p);
+    if d > 0.05 {
+        let k = (d / 3.5).min(1.0);
+        r += 58.0 * k;
+        g -= 16.0 * k;
+        b -= 14.0 * k;
+    }
+    rgb(
+        r.clamp(0.0, 255.0) as u8,
+        g.clamp(0.0, 255.0) as u8,
+        b.clamp(0.0, 255.0) as u8,
+    )
+}
+
 /// 지형과 시체를 그린다. 카메라가 그대로면 다시 그릴 필요가 없어 따로 둔다.
 pub fn draw_ground(frame: &mut Frame, world: &World, decals: &Decals, cam: &Camera) {
     let (w, h) = (frame.w, frame.h);
     let mpp = cam.mpp;
     let x0 = cam.center[0] - w as f32 * 0.5 * mpp;
     let y_top = cam.center[1] + h as f32 * 0.5 * mpp;
-    let terrain = &world.terrain;
 
     frame
         .px
@@ -205,45 +256,121 @@ pub fn draw_ground(frame: &mut Frame, world: &World, decals: &Decals, cam: &Came
         .enumerate()
         .for_each(|(row, line)| {
             let wy = y_top - row as f32 * mpp;
-            let mut wx = x0;
-            for px in line.iter_mut() {
-                let p = [wx, wy];
-                let t = terrain.at(p);
-                // 화소마다 고도를 보간하면 너무 비싸다. 칸 값을 그대로 쓴다
-                let elev = terrain.height[terrain.idx(p)];
-                // 고도에 따라 밝기를 줘서 기복이 보이게 한다
-                let shade = (elev * 0.42).clamp(-22.0, 74.0);
-                let base = match t {
-                    Terrain::Plain => [30.0, 42.0, 28.0],
-                    Terrain::Forest => [17.0, 39.0, 19.0],
-                    Terrain::Rock => [64.0, 62.0, 58.0],
-                    Terrain::Water => [22.0, 42.0, 78.0],
-                    Terrain::Ford => [58.0, 82.0, 96.0],
-                    Terrain::Marsh => [40.0, 44.0, 30.0],
-                    Terrain::Wall => [150.0, 146.0, 136.0],
-                    Terrain::Gate => [112.0, 84.0, 48.0],
-                    Terrain::Rubble => [96.0, 90.0, 82.0],
-                    Terrain::Moat => [26.0, 46.0, 72.0],
-                };
-                let mut r = base[0] + shade;
-                let mut g = base[1] + shade;
-                let mut b = base[2] + shade * 0.7;
-                // 시체가 쌓인 자리는 검붉게 물든다
-                let d = decals.smooth_at(p);
-                if d > 0.05 {
-                    let k = (d / 3.5).min(1.0);
-                    r += 58.0 * k;
-                    g -= 16.0 * k;
-                    b -= 14.0 * k;
-                }
-                *px = rgb(
-                    r.clamp(0.0, 255.0) as u8,
-                    g.clamp(0.0, 255.0) as u8,
-                    b.clamp(0.0, 255.0) as u8,
-                );
-                wx += mpp;
+            for (col, px) in line.iter_mut().enumerate() {
+                *px = ground_color([x0 + col as f32 * mpp, wy], world, decals);
             }
         });
+}
+
+/// 배경을 담아 두었다가 카메라가 그대로면 다시 쓴다.
+///
+/// 지형 그리기가 프레임 예산의 절반 이상을 먹는데, 카메라가 멈춰 있으면 매 프레임
+/// 같은 그림을 다시 만드는 셈이다. 시체는 매 틱 쌓이지만 그것 때문에 배경을 통째로
+/// 버릴 이유는 없다 — 값이 바뀐 칸 언저리만 덧칠하면 된다.
+pub struct GroundCache {
+    px: Vec<u32>,
+    w: usize,
+    h: usize,
+    center: [f32; 2],
+    mpp: f32,
+    valid: bool,
+}
+
+impl Default for GroundCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl GroundCache {
+    pub fn new() -> Self {
+        Self {
+            px: Vec::new(),
+            w: 0,
+            h: 0,
+            center: [f32::NAN, f32::NAN],
+            mpp: f32::NAN,
+            valid: false,
+        }
+    }
+
+    /// 지형 자체가 달라졌을 때(성벽 붕괴 등) 부른다.
+    pub fn invalidate(&mut self) {
+        self.valid = false;
+    }
+
+    /// 배경을 프레임에 채운다. 다시 그렸으면 true.
+    pub fn blit(
+        &mut self,
+        frame: &mut Frame,
+        world: &World,
+        decals: &Decals,
+        cam: &Camera,
+    ) -> bool {
+        let moved = !self.valid
+            || self.w != frame.w
+            || self.h != frame.h
+            || self.center != cam.center
+            || self.mpp != cam.mpp;
+
+        if moved {
+            self.px.resize(frame.w * frame.h, 0);
+            self.w = frame.w;
+            self.h = frame.h;
+            self.center = cam.center;
+            self.mpp = cam.mpp;
+            self.valid = true;
+            let (w, h, mpp) = (self.w, self.h, cam.mpp);
+            let x0 = cam.center[0] - w as f32 * 0.5 * mpp;
+            let y_top = cam.center[1] + h as f32 * 0.5 * mpp;
+            self.px
+                .par_chunks_mut(w)
+                .enumerate()
+                .for_each(|(row, line)| {
+                    let wy = y_top - row as f32 * mpp;
+                    for (col, px) in line.iter_mut().enumerate() {
+                        // 덧칠 경로와 같은 식으로 좌표를 낸다. 여기서 mpp 를 더해
+                        // 나가면 오차가 쌓여, 덧칠한 자리만 색이 한 단계 어긋난다.
+                        *px = ground_color([x0 + col as f32 * mpp, wy], world, decals);
+                    }
+                });
+        } else {
+            self.patch(world, decals, cam);
+        }
+
+        frame.px.copy_from_slice(&self.px);
+        moved
+    }
+
+    /// 시체가 새로 쌓인 칸 언저리만 다시 칠한다.
+    fn patch(&mut self, world: &World, decals: &Decals, cam: &Camera) {
+        if decals.dirty.is_empty() {
+            return;
+        }
+        let (w, h) = (self.w, self.h);
+        let mpp = cam.mpp;
+        // 이웃 칸까지 섞어 읽으므로 한 칸이 바뀌면 그 둘레도 함께 달라진다.
+        // 넉넉히 잡는다 — 좁게 잡으면 덧칠 자국이 네모나게 남는다.
+        let reach = decals.cell * 2.0;
+        for &ci in &decals.dirty {
+            let cx = (ci as usize % decals.w) as f32 * decals.cell + decals.cell * 0.5;
+            let cy = (ci as usize / decals.w) as f32 * decals.cell + decals.cell * 0.5;
+            let (sx, sy) = cam.to_screen([cx, cy], w, h);
+            let rad = (reach / mpp).ceil();
+            let x0 = ((sx - rad).floor() as i32).max(0);
+            let x1 = ((sx + rad).ceil() as i32).min(w as i32 - 1);
+            let y0 = ((sy - rad).floor() as i32).max(0);
+            let y1 = ((sy + rad).ceil() as i32).min(h as i32 - 1);
+            for y in y0..=y1 {
+                for x in x0..=x1 {
+                    // 전체 그리기와 똑같은 좌표를 써야 한다. 반 화소만 어긋나도
+                    // 덧칠한 자리와 나머지가 미세하게 다른 색이 되어 자국이 남는다.
+                    let p = cam.to_world(x as f32, y as f32, w, h);
+                    self.px[y as usize * w + x as usize] = ground_color(p, world, decals);
+                }
+            }
+        }
+    }
 }
 
 /// 병력과 날아가는 것들을 그린다.

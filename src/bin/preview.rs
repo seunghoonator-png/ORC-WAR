@@ -7,7 +7,7 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 
 use orc_war::map::gen::{MapKind, MapOptions};
-use orc_war::render::{draw_ground, draw_hud, draw_units, fit_camera, Decals, Frame};
+use orc_war::render::{draw_ground, draw_hud, draw_units, fit_camera, Decals, Frame, GroundCache};
 use orc_war::scenario::Scenario;
 use orc_war::sim::{Outcome, WORLD_SIZE};
 
@@ -72,7 +72,8 @@ fn main() -> std::io::Result<()> {
     }
 
     let mut frame = Frame::new(W, H);
-    // 렌더 경로를 여러 번 태워 프레임 예산(60fps = 16.7ms) 안에 드는지 본다
+    // 렌더 경로를 여러 번 태워 프레임 예산(60fps = 16.7ms) 안에 드는지 본다.
+    // 캐시가 있을 때와 없을 때를 나눠 잰다.
     let mut t_ground = 0.0f64;
     let mut t_units = 0.0f64;
     const REPS: u32 = 10;
@@ -85,6 +86,37 @@ fn main() -> std::io::Result<()> {
         t_ground += (b - a).as_secs_f64() * 1e3;
         t_units += (c - b).as_secs_f64() * 1e3;
     }
+
+    // 실전 조건으로 캐시를 잰다. 전투가 계속 돌아가므로 매 프레임 시체가
+    // 새로 쌓이고, 그만큼 배경을 덧칠해야 한다. 멈춘 화면을 재면 의미가 없다.
+    let mut cache = GroundCache::new();
+    cache.blit(&mut frame, &world, &decals, &cam);
+    decals.clear_dirty();
+    let mut t_cached = 0.0f64;
+    let mut t_naive = 0.0f64;
+    let mut deaths = 0usize;
+    const LIVE: u32 = 60;
+    for _ in 0..LIVE {
+        // 60fps 화면이라면 한 프레임에 시뮬 한 틱쯤 돈다
+        world.step();
+        decals.absorb(&world);
+        deaths += world.death_events.len();
+
+        let a = std::time::Instant::now();
+        cache.blit(&mut frame, &world, &decals, &cam);
+        t_cached += a.elapsed().as_secs_f64() * 1e3;
+        decals.clear_dirty();
+
+        let b = std::time::Instant::now();
+        draw_ground(&mut frame, &world, &decals, &cam);
+        t_naive += b.elapsed().as_secs_f64() * 1e3;
+    }
+    println!(
+        "  살아 있는 전장에서: 캐시 {:.2} ms  통째로 {:.2} ms  (프레임당 사망 {:.0})",
+        t_cached / LIVE as f64,
+        t_naive / LIVE as f64,
+        deaths as f64 / LIVE as f64
+    );
     draw_hud(&mut frame, &world, 2.0, false, 60.0, outcome);
     println!(
         "  렌더 {:.2} ms/frame  (지형 {:.2} + 병력 {:.2})  {}x{}",

@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use minifb::{Key, KeyRepeat, MouseButton, MouseMode, Window, WindowOptions};
 
-use orc_war::render::{draw_ground, draw_hud, draw_units, fit_camera, Decals, Frame};
+use orc_war::render::{draw_hud, draw_units, fit_camera, Decals, Frame, GroundCache};
 use orc_war::scenario::Scenario;
 use orc_war::sim::{Outcome, DT, WORLD_SIZE};
 
@@ -113,6 +113,7 @@ fn main() {
     window.set_target_fps(60);
 
     let mut frame = Frame::new(WIN_W, WIN_H);
+    let mut ground = GroundCache::new();
     let mut cam = fit_camera(&world, WIN_W, WIN_H);
     let mut speed_idx = 1usize;
     let mut paused = false;
@@ -139,6 +140,7 @@ fn main() {
                 Key::R => {
                     world = setup.scenario.build();
                     decals = Decals::new(WORLD_SIZE, 4.0);
+                    ground.invalidate();
                     cam = fit_camera(&world, w, h);
                     accumulator = 0.0;
                     outcome = Outcome::Ongoing;
@@ -204,6 +206,10 @@ fn main() {
             while accumulator >= DT && steps < MAX_STEPS_PER_FRAME {
                 world.step();
                 decals.absorb(&world);
+                if !world.breach_events.is_empty() {
+                    // 성벽이 무너졌으면 지형 자체가 달라졌다
+                    ground.invalidate();
+                }
                 accumulator -= DT;
                 steps += 1;
                 outcome = world.outcome(setup.scenario.max_ticks);
@@ -218,7 +224,8 @@ fn main() {
         }
 
         // --- 그리기 ---
-        draw_ground(&mut frame, &world, &decals, &cam);
+        ground.blit(&mut frame, &world, &decals, &cam);
+        decals.clear_dirty();
         draw_units(&mut frame, &world, &cam);
         draw_hud(&mut frame, &world, speed, paused, fps, outcome);
 
