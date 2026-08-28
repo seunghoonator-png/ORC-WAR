@@ -41,16 +41,16 @@ jobs:
         # 러너는 코어가 적으니 그것은 통과로 친다. 1(동작 이상)은 실패로 남긴다 —
         # `|| true` 로 뭉개면 진짜 회귀까지 같이 삼킨다
         run: |
-          cargo run --release --no-default-features -- --selftest || \
+          cargo run --release --no-default-features --bin orc-war -- --selftest || \
             { code=$?; if [ "$code" -ne 2 ]; then exit "$code"; fi; \
               echo "성능 항목만 미달 (코어 수 탓) — 통과로 친다"; }
       - name: 병종 상성
         run: |
-          cargo run --release --no-default-features -- --matchup 6 600 3 600
-          cargo run --release --no-default-features -- --matchup 6 600 1 600
-          cargo run --release --no-default-features -- --matchup 3 600 2 600
+          cargo run --release --no-default-features --bin orc-war -- --matchup 6 600 3 600
+          cargo run --release --no-default-features --bin orc-war -- --matchup 6 600 1 600
+          cargo run --release --no-default-features --bin orc-war -- --matchup 3 600 2 600
       - name: 공성전
-        run: cargo run --release --no-default-features -- --siege 8000 3000 1
+        run: cargo run --release --no-default-features --bin orc-war -- --siege 8000 3000 1
 
   windows:
     name: Windows 실행파일

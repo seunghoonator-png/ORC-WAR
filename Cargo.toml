@@ -2,6 +2,9 @@
 name = "orc-war"
 version = "0.1.0"
 edition = "2021"
+# 개발용 보조 실행파일(preview, diagnose, symmetry)이 함께 있어서, 이것이 없으면
+# `cargo run` 이 어느 것을 돌릴지 몰라 그 자리에서 멈춘다.
+default-run = "orc-war"
 
 [dependencies]
 rayon = "1.10"
