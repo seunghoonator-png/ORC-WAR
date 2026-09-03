@@ -9,19 +9,48 @@
 use orc_war::config::{BattleConfig, Battlefield, Doctrine, ARMY_SIZES};
 
 /// Windows 콘솔은 기본 코드페이지가 CP949 라 UTF-8 출력이 깨진다.
+///
+/// 켤 때 원래 값을 적어 두고, **끝날 때 되돌린다.** 콘솔의 코드페이지는 프로세스가
+/// 아니라 콘솔 창의 것이라 우리가 바꾼 채 나가면 그 뒤에 도는 배치 파일의
+/// `echo 한글` 이 깨진다. (배치 파일은 cmd.exe 가 UTF-8 을 제대로 못 읽어
+/// CP949 로 두어야 하므로, 둘이 같이 살려면 exe 가 뒤처리를 해야 한다)
 #[cfg(windows)]
-fn setup_console() {
-    extern "system" {
-        fn SetConsoleOutputCP(code_page: u32) -> i32;
-    }
+struct ConsoleCodePage(u32);
+
+#[cfg(windows)]
+extern "system" {
+    fn SetConsoleOutputCP(code_page: u32) -> i32;
+    fn GetConsoleOutputCP() -> u32;
+}
+
+#[cfg(windows)]
+fn setup_console() -> ConsoleCodePage {
     const CP_UTF8: u32 = 65001;
     unsafe {
+        let before = GetConsoleOutputCP();
         SetConsoleOutputCP(CP_UTF8);
+        ConsoleCodePage(before)
+    }
+}
+
+#[cfg(windows)]
+impl Drop for ConsoleCodePage {
+    fn drop(&mut self) {
+        if self.0 != 0 {
+            unsafe {
+                SetConsoleOutputCP(self.0);
+            }
+        }
     }
 }
 
 #[cfg(not(windows))]
-fn setup_console() {}
+struct ConsoleCodePage;
+
+#[cfg(not(windows))]
+fn setup_console() -> ConsoleCodePage {
+    ConsoleCodePage
+}
 
 /// 창 모드에서는 딸려 온 콘솔 창을 떼어 낸다.
 ///
@@ -102,7 +131,18 @@ fn parse_doctrine(s: &str) -> Option<Doctrine> {
 }
 
 fn main() {
-    setup_console();
+    // 끝날 때 콘솔 코드페이지를 되돌리려면 process::exit 로 나가면 안 된다.
+    // 종료 코드는 여기서 받아 마지막에 넘긴다
+    let code = {
+        let _console = setup_console();
+        run()
+    };
+    if code != 0 {
+        std::process::exit(code);
+    }
+}
+
+fn run() -> i32 {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let bare = argv.is_empty();
 
@@ -114,22 +154,29 @@ fn main() {
             if bare {
                 hold_window_open();
             }
-            return;
+            return 0;
         }
-        "--matchup" => return orc_war::tools::matchup::run(&argv[1..]),
-        "--siege" => return orc_war::tools::siege::run(&argv[1..]),
+        "--matchup" => {
+            orc_war::tools::matchup::run(&argv[1..]);
+            return 0;
+        }
+        "--siege" => {
+            orc_war::tools::siege::run(&argv[1..]);
+            return 0;
+        }
         "--snapshot" => {
             if let Err(e) = orc_war::tools::snapshot::run(&argv[1..]) {
                 eprintln!("스냅샷 실패: {e}");
+                return 1;
             }
-            return;
+            return 0;
         }
         "--selftest" => {
             // 종료 코드: 0 전부 통과 · 2 성능만 미달 · 1 동작이 어긋남.
             // 코어가 적은 CI 러너에서 성능 미달과 진짜 회귀를 갈라 보기 위한 것이다.
             let verdict = orc_war::tools::selftest::run(&argv[1..]);
             hold_window_open();
-            std::process::exit(verdict.exit_code());
+            return verdict.exit_code();
         }
         _ => {}
     }
@@ -138,7 +185,7 @@ fn main() {
         .any(|a| a == "--bench" || a == "--headless" || a == "-r" || a == "--repeat")
     {
         orc_war::tools::bench::run(&argv);
-        return;
+        return 0;
     }
 
     // --- 창 모드 ---
@@ -182,6 +229,7 @@ fn main() {
     }
     let _ = ARMY_SIZES;
     run_window(if explicit { Some(cfg) } else { None });
+    0
 }
 
 #[cfg(feature = "render")]
