@@ -32,6 +32,10 @@ const BEHIND_TO_SLOW: u32 = 45;
 
 const SPEEDS: [f32; 6] = [0.5, 1.0, 2.0, 4.0, 8.0, 16.0];
 
+/// 화면이 넘어간 뒤 전환 키를 무시할 프레임 수. 60fps 에서 약 0.25초 —
+/// 사람이 키에서 손을 떼기에 넉넉하고, 다음 조작을 기다리게 할 만큼 길지는 않다.
+const LOCK_FRAMES: u32 = 15;
+
 struct Battle {
     world: World,
     decals: Decals,
@@ -95,13 +99,25 @@ pub fn main_loop(start: Option<BattleConfig>) {
     let mut fps = 0.0f32;
     let mut drag_from: Option<(f32, f32)> = None;
     let mut title_timer = Instant::now();
+    // 화면을 막 넘어온 동안은 전환 키를 먹지 않는다.
+    //
+    // 사람이 키를 한 번 누르면 60fps 화면에서는 대여섯 프레임 동안 눌린 상태다.
+    // 그 사이 화면이 넘어가면 다음 화면이 같은 누름을 자기 것으로 받는다 —
+    // 전투 끝에 ENTER 를 한 번 눌렀는데 결과 화면을 지나쳐 설정으로 돌아가고,
+    // ESC 를 한 번 눌렀는데 결과를 보지도 못하고 프로그램이 닫힌다.
+    let mut lock: u32 = 0;
 
     while window.is_open() {
         let (w, h) = window.get_size();
         let (w, h) = (w.max(480), h.max(360));
         frame.resize(w, h);
+        lock = lock.saturating_sub(1);
+        // 값을 바꾸는 키는 눌러 두면 반복되는 편이 낫다.
+        // 반대로 화면을 넘기는 키는 한 번 누르면 한 번이어야 한다
         let keys = window.get_keys_pressed(KeyRepeat::Yes);
-        let esc = window.is_key_pressed(Key::Escape, KeyRepeat::No);
+        let once = |w: &Window, k: Key| lock == 0 && w.is_key_pressed(k, KeyRepeat::No);
+        let esc = once(&window, Key::Escape);
+        let enter = once(&window, Key::Enter) || once(&window, Key::NumPadEnter);
 
         match screen {
             // ---------------------------------------------------------- 설정
@@ -141,8 +157,10 @@ pub fn main_loop(start: Option<BattleConfig>) {
             // ---------------------------------------------------------- 전투
             Screen::Battle => {
                 let b = battle.as_mut().expect("전투 상태가 없다");
-                if esc {
+                // 결판이 났으면 ESC 도 ENTER 도 결과 화면으로 간다
+                if esc || (enter && !matches!(b.outcome, Outcome::Ongoing)) {
                     screen = Screen::Report;
+                    lock = LOCK_FRAMES;
                     continue;
                 }
                 for k in &keys {
@@ -151,19 +169,12 @@ pub fn main_loop(start: Option<BattleConfig>) {
                         Key::LeftBracket => b.speed_idx = b.speed_idx.saturating_sub(1),
                         Key::RightBracket => b.speed_idx = (b.speed_idx + 1).min(SPEEDS.len() - 1),
                         Key::F => b.cam = fit_camera(&b.world, w, h),
-                        Key::R => {
-                            *b = Battle::new(&setup.cfg, w, h);
-                        }
-                        Key::Enter | Key::NumPadEnter => {
-                            if !matches!(b.outcome, Outcome::Ongoing) {
-                                screen = Screen::Report;
-                            }
-                        }
                         _ => {}
                     }
                 }
-                if !matches!(screen, Screen::Battle) {
-                    continue;
+                if once(&window, Key::R) {
+                    *b = Battle::new(&setup.cfg, w, h);
+                    last = Instant::now();
                 }
                 camera_input(&mut window, &mut b.cam, w, h, &mut drag_from);
 
@@ -246,19 +257,15 @@ pub fn main_loop(start: Option<BattleConfig>) {
                     return;
                 }
                 let b = battle.as_mut().expect("전투 상태가 없다");
-                for k in &keys {
-                    match k {
-                        Key::Enter | Key::NumPadEnter | Key::Space => {
-                            screen = Screen::Setup;
-                        }
-                        Key::R => {
-                            splash(&mut frame, &mut window, &setup.cfg);
-                            *b = Battle::new(&setup.cfg, w, h);
-                            screen = Screen::Battle;
-                            last = Instant::now();
-                        }
-                        _ => {}
-                    }
+                if enter || once(&window, Key::Space) {
+                    screen = Screen::Setup;
+                    lock = LOCK_FRAMES;
+                } else if once(&window, Key::R) {
+                    splash(&mut frame, &mut window, &setup.cfg);
+                    *b = Battle::new(&setup.cfg, w, h);
+                    screen = Screen::Battle;
+                    lock = LOCK_FRAMES;
+                    last = Instant::now();
                 }
                 if matches!(screen, Screen::Report) {
                     report::draw(&mut frame, &b.world, &setup.cfg, b.outcome);
